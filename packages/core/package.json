@@ -1,0 +1,109 @@
+{
+  "name": "poppyseed",
+  "version": "0.1.0",
+  "description": "Implements the Personal Agent Protocol (Poppy for short) in Next.js: discovery, sign-in, tools over MCP and OpenAPI, operations people approve, and conversations. Includes a test agent and the conformance suite.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./paths": "./src/paths.js",
+    "./next": "./src/next/index.ts",
+    "./next/config": {
+      "types": "./src/next/config.d.ts",
+      "default": "./src/next/config.js"
+    },
+    "./agent": "./src/agent/index.ts",
+    "./conformance": "./src/conformance/index.ts"
+  },
+  "bin": {
+    "poppyseed": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p .",
+    "build": "tsc -p tsconfig.build.json && cp src/paths.d.ts dist/paths.d.ts && cp src/next/config.d.ts dist/next/config.d.ts",
+    "prepack": "pnpm build",
+    "poppyseed": "node --experimental-strip-types --no-warnings src/cli.ts",
+    "spec:build": "node --experimental-strip-types --no-warnings scripts/spec.ts build",
+    "spec:check": "node --experimental-strip-types --no-warnings scripts/spec.ts check",
+    "spec:reconciled": "node --experimental-strip-types --no-warnings scripts/spec.ts reconciled",
+    "mutants": "node --experimental-strip-types --no-warnings scripts/mutants.ts"
+  },
+  "dependencies": {
+    "jose": "^6.0.0"
+  },
+  "peerDependencies": {
+    "next": ">=15",
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "next": "^16.4.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./paths": {
+        "types": "./dist/paths.d.ts",
+        "default": "./dist/paths.js"
+      },
+      "./next": {
+        "types": "./dist/next/index.d.ts",
+        "default": "./dist/next/index.js"
+      },
+      "./next/config": {
+        "types": "./dist/next/config.d.ts",
+        "default": "./dist/next/config.js"
+      },
+      "./agent": {
+        "types": "./dist/agent/index.d.ts",
+        "default": "./dist/agent/index.js"
+      },
+      "./conformance": {
+        "types": "./dist/conformance/index.d.ts",
+        "default": "./dist/conformance/index.js"
+      }
+    },
+    "bin": {
+      "poppyseed": "./dist/cli.js"
+    }
+  },
+  "keywords": [
+    "poppy",
+    "personal-agent-protocol",
+    "pap",
+    "nextjs",
+    "mcp",
+    "openapi",
+    "agents",
+    "oauth",
+    "dpop",
+    "conformance",
+    "testing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akshay5995/poppyseed.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://withpoppyseed.dev",
+  "engines": {
+    "node": ">=20"
+  },
+  "bugs": {
+    "url": "https://github.com/akshay5995/poppyseed/issues"
+  }
+}

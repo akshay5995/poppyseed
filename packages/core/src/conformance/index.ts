@@ -1,0 +1,10 @@
+export { check, refusals, type Check, type Refusal } from "./check.ts";
+export { checks } from "./checks/index.ts";
+export { httpHooks } from "./http-hooks.ts";
+export { Harness, type Hooks, type Person, type Target, type TargetProfile } from "./harness.ts";
+export { httpAgentHost, memoryAgentHost, type AgentHost } from "../agent/index.ts";
+export { CURRENT_LEG, LEGS, PLAN } from "./plan.ts";
+export { formatConsole, formatMarkdown, formatStatus } from "./report.ts";
+export { REQUIREMENTS, SPEC_VERSION } from "./requirements.generated.ts";
+export { requirementViews, runCheck, runConformance, selectChecks, type CheckResult, type RequirementView, type RunReport } from "./runner.ts";
+export type { Level, PlanEntry, Requirement, Role } from "./types.ts";

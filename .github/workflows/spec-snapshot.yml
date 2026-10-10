@@ -1,0 +1,57 @@
+name: spec-snapshot
+
+# Keeps spec/source/ an exact copy of the official Personal Agent Protocol site.
+# Push or manual run: refresh the snapshot on the current branch.
+# Weekly: if the official text changed, push the new snapshot to the
+# spec-snapshot branch and fail, so spec/pap-0.1 gets reconciled.
+on:
+  push:
+    branches: [spec-snapshot]
+    paths: [.github/workflows/spec-snapshot.yml]
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch every page in the sitemap
+        run: |
+          set -euo pipefail
+          base=https://personalagentprotocol.org
+          out=spec/source
+          tmp=$(mktemp -d)
+          curl -fsSL --retry 3 "$base/sitemap.xml" -o "$tmp/sitemap.xml"
+          for loc in $(grep -o '<loc>[^<]*' "$tmp/sitemap.xml" | sed 's/<loc>//'); do
+            path=${loc#"$base"}; path=${path#/}
+            [ -z "$path" ] && continue
+            mkdir -p "$tmp/$(dirname "$path")"
+            # The site serves each page's Markdown source at <page>.md; fall back to HTML.
+            curl -fsSL --retry 3 "$loc.md" -o "$tmp/$path.md" || curl -fsSL --retry 3 "$loc" -o "$tmp/$path.html"
+          done
+          (cd "$tmp" && find . -type f ! -name SHA256SUMS | sort | xargs sha256sum > SHA256SUMS)
+          if [ -f "$out/SHA256SUMS" ] && cmp -s "$tmp/SHA256SUMS" "$out/SHA256SUMS"; then
+            echo "Official spec unchanged."
+            exit 0
+          fi
+          rm -rf "$out" && mkdir -p "$out" && cp -R "$tmp/." "$out/"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$out/FETCHED_AT"
+          echo "CHANGED=1" >> "$GITHUB_ENV"
+      - name: Commit the new snapshot
+        if: env.CHANGED == '1'
+        run: |
+          git config user.name "spec-snapshot"
+          git config user.email "actions@github.com"
+          git add spec/source
+          git commit -m "Snapshot personalagentprotocol.org $(cat spec/source/FETCHED_AT)"
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            git push --force origin HEAD:spec-snapshot
+            echo "::error::The official spec changed. Merge the spec-snapshot branch, then reconcile spec/pap-0.1 (pnpm spec:check lists what to do)."
+            exit 1
+          fi
+          git push

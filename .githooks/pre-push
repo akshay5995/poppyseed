@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installed by `pnpm install` (prepare script). Skip once with: git push --no-verify
+echo "▸ pre-push: pnpm verify (spec check, typecheck, tests, conformance)"
+exec pnpm verify

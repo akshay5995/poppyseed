@@ -1,0 +1,28 @@
+{
+  "name": "poppyseed-monorepo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
+    "dev": "pnpm --filter poppyseed-site dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "spec:build": "pnpm --filter poppyseed spec:build",
+    "spec:check": "pnpm --filter poppyseed spec:check",
+    "conformance": "pnpm --filter poppyseed poppyseed check",
+    "e2e": "PORT=${E2E_PORT:-3100} scripts/fixture.sh e2e",
+    "mutants": "pnpm --filter poppyseed mutants",
+    "verify": "pnpm spec:check && pnpm typecheck && pnpm test",
+    "verify:full": "pnpm verify && pnpm e2e && pnpm mutants",
+    "spec:reconciled": "pnpm --filter poppyseed spec:reconciled",
+    "quickstart": "scripts/quickstart.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7",
+    "zod": "^4.6.5"
+  }
+}

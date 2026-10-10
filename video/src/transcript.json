@@ -1,0 +1,137 @@
+{
+  "recordedAt": "2026-10-10T14:51:52.349Z",
+  "origin": "http://localhost:3000",
+  "steps": [
+    {
+      "id": "discover",
+      "title": "Discover the company",
+      "actor": "agent",
+      "request": "GET /.well-known/poppy.json",
+      "status": 200,
+      "lines": [
+        "organization: Poppy Travel",
+        "apis: mcp, openapi",
+        "extensions: operations"
+      ],
+      "at": 4
+    },
+    {
+      "id": "session",
+      "title": "Start a Session",
+      "actor": "agent",
+      "request": "POST /oauth/token",
+      "status": 200,
+      "lines": [
+        "grant: jwt-bearer, signed by the agent's key",
+        "token_type: DPoP · signed_in: false",
+        "session_id: ses_wXEK16ok…"
+      ],
+      "at": 1125
+    },
+    {
+      "id": "search",
+      "title": "Search flights over MCP",
+      "actor": "agent",
+      "request": "POST /mcp · tools/call search_flights",
+      "status": 200,
+      "lines": [
+        "SFO → LIS · 2026-10-24 · 12 offers",
+        "Poppy Air PY1132 · departs 07:03",
+        "$775.00"
+      ],
+      "at": 1149
+    },
+    {
+      "id": "device",
+      "title": "Ask Maya to sign in",
+      "actor": "agent",
+      "request": "POST /oauth/device",
+      "status": 200,
+      "lines": [
+        "user_code: ZMGM-MDQT",
+        "scope: poppy:read poppy:write",
+        "verify at /poppy/device"
+      ],
+      "at": 1158
+    },
+    {
+      "id": "approve",
+      "title": "Maya checks the code and approves",
+      "actor": "person",
+      "request": "POST /poppy/device",
+      "status": 200,
+      "lines": [
+        "signed in to poppy.travel as maya@poppy.travel",
+        "code ZMGM-MDQT matches",
+        "approves poppy:read, poppy:write"
+      ],
+      "at": 1172
+    },
+    {
+      "id": "signed-in",
+      "title": "The Session signs in",
+      "actor": "agent",
+      "request": "POST /oauth/token · device_code",
+      "status": 200,
+      "lines": [
+        "signed_in: true",
+        "scope: poppy:read poppy:write",
+        "refresh_token: an Account Token for next time"
+      ],
+      "at": 1184
+    },
+    {
+      "id": "propose",
+      "title": "Propose the booking",
+      "actor": "agent",
+      "request": "POST /poppy/tools/book_flight",
+      "status": 202,
+      "lines": [
+        "operation op_m0TGbkXSB… · revision 1 · proposed",
+        "Book Poppy Air PY1132, San Francisco to Lisbon, departing 2026-10-24 at 07:03 (America/Los_Angeles), economy Basic fare (non-refundable, changes $75.00, 0 checked bags), for Maya Chen. $775.00 will be charged to the card on file."
+      ],
+      "at": 1201
+    },
+    {
+      "id": "confirm",
+      "title": "Maya says yes; the agent confirms",
+      "actor": "agent",
+      "request": "POST /poppy/operations/op_m0TGbkXSB…/confirm",
+      "status": 200,
+      "lines": [
+        "state: succeeded",
+        "Booked: reference PT-1DXA7J. $775.00 charged to the card on file."
+      ],
+      "at": 1213
+    },
+    {
+      "id": "trips",
+      "title": "Read her trips",
+      "actor": "agent",
+      "request": "POST /poppy/tools/my_trips",
+      "status": 200,
+      "lines": [
+        "1 trip, newest:",
+        "PT-1DXA7J · Poppy Air PY1132 SFO→LIS 2026-10-24 07:03 (America/Los_Angeles)"
+      ],
+      "at": 1219
+    },
+    {
+      "id": "chat",
+      "title": "Ask support",
+      "actor": "agent",
+      "request": "POST /poppy/conversations",
+      "status": 201,
+      "lines": [
+        "agent: What trips do I have?",
+        "Poppy Travel: You have 1 trip(s): PT-1DXA7J, Poppy Air PY1132 SFO→LIS 2026-10-24 07:03 (America/Los_Angeles)."
+      ],
+      "at": 1236
+    }
+  ],
+  "proof": {
+    "checks": 98,
+    "rules": 147,
+    "run": "20261010T144008Z"
+  }
+}

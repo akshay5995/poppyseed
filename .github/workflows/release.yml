@@ -1,0 +1,46 @@
+name: release
+
+# Push a tag like v0.2.0 after setting that version in
+# packages/core/package.json. Every gate runs again, then poppyseed goes to
+# npm with provenance, and the tag gets a GitHub release.
+#
+# No npm token: npm trusts this workflow (trusted publishing). Set it up once
+# on npmjs.com under poppyseed → Settings → Trusted publishing → GitHub
+# Actions, with this repository and the workflow file name release.yml.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  gates:
+    uses: ./.github/workflows/verify.yml
+
+  publish:
+    needs: gates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: The tag matches the published version
+        run: |
+          version=$(node -p "require('./packages/core/package.json').version")
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "poppyseed is $version, the tag is $GITHUB_REF_NAME"; exit 1; }
+      # pnpm pack applies publishConfig (the dist exports); npm 11.5.1+ publishes that tarball with OIDC, so no token.
+      - run: npm install -g npm@latest
+      - name: Publish to npm
+        run: |
+          (cd packages/core && pnpm pack --pack-destination "$RUNNER_TEMP")
+          npm publish "$RUNNER_TEMP"/poppyseed-*.tgz --access public
+      - name: GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,19 @@
+{
+  "name": "poppyseed-reference",
+  "private": true,
+  "version": "0.0.0",
+  "description": "The reference company the conformance suite runs against, in-process and as a Next.js app.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "poppyseed": "workspace:*",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {}
+}
