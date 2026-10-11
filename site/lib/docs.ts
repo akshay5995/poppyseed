@@ -24,6 +24,7 @@ export const GROUPS: { title: string; pages: Page[] }[] = [
 			{ kind: "doc", slug: "guides", title: "Guides", blurb: "Sign-in, approvals, conversations and web sessions: add what your site needs." },
 			{ kind: "doc", slug: "testing", title: "Test your site", blurb: "Check your site against the protocol's company-side rules, with npx poppyseed check." },
 			{ kind: "doc", slug: "deployment", title: "Deploy", blurb: "Stores, secrets, serverless and the production checklist." },
+			{ kind: "doc", slug: "agents", title: "Write an agent", blurb: "The other side of the protocol: what a company expects from a personal agent, and the two JWTs that trip people up." },
 		],
 	},
 	{
