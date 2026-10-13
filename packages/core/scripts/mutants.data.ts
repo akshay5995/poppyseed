@@ -28,6 +28,7 @@ export const MUTANTS: Mutant[] = [
 	{ name: "refetch keys on every failure", file: "clients.ts", find: "(refetch ? REFETCH_MIN_MS : cached.ttl)", replace: "(refetch ? 0 : cached.ttl)", caughtBy: "identity/metadata-fetch-bounded" },
 	{ name: "accept pre-dated assertions", file: "clients.ts", find: ", maxTokenAge: 120 }", replace: " }", caughtBy: "identity/assertion-fresh" },
 	{ name: "IPv4-mapped hosts are public", file: "clients.ts", find: "if (mapped) {", replace: "if (false) {", caughtBy: "identity/private-agent-urls" },
+	{ name: "NAT64 hosts are public", file: "clients.ts", find: "const mapped = /^(?:::ffff:|64:ff9b::)", replace: "const mapped = /^(?:::ffff:)", caughtBy: "identity/private-agent-urls" },
 	{ name: "skip client_id match", file: "clients.ts", find: "if (obj.client_id !== fetchedFrom) throw", replace: "if (false) throw", caughtBy: "identity/client-id-must-match" },
 	{ name: "keys on any domain", file: "clients.ts", find: "if (URL.parse(uri)?.hostname !== host) throw", replace: "if (false) throw", caughtBy: "identity/keys-same-domain" },
 	{ name: "accept embedded keys", file: "clients.ts", find: "if (header.jwk || header.jku || header.x5u) throw", replace: "if (false) throw", caughtBy: "identity/assertion-lifetime" },
@@ -176,7 +177,7 @@ export const UNIT_MUTANTS: UnitMutant[] = [
 
 	// The connect-time address check.
 	{ name: "private addresses connect", file: "packages/core/src/safe-fetch.ts", find: "addresses.some(({ address }) => isPrivateHost(address))", replace: "false", test: "packages/core/test/safe-fetch.test.ts", caughtBy: "safeFetch > refuses a hostname that resolves to loopback" },
-	{ name: "one address when Node asks for all", file: "packages/core/src/safe-fetch.ts", find: "if (options.all) return callback(null, addresses);", replace: "", test: "packages/core/test/safe-fetch.test.ts", caughtBy: "safeFetch > answers the list of addresses Node 20+ asks for" },
+	{ name: "one address when Node asks for all", file: "packages/core/src/safe-fetch.ts", find: "if (options.all) return callback(null, addresses);", replace: "", test: "packages/core/test/safe-fetch.test.ts", caughtBy: "safeFetch > connects to a public address on Node 20+" },
 
 	// Metadata cache bounds, with a fake clock.
 	{ name: "max-age ignored", file: "packages/core/src/clients.ts", find: "Math.min(MAX_CACHE_MS, Math.max(MIN_CACHE_MS, Math.min(metadata.maxAgeMs, keySet.maxAgeMs)))", replace: "MIN_CACHE_MS", test: "packages/core/test/client-cache.test.ts", caughtBy: "metadata caching > keeps metadata for its max-age" },

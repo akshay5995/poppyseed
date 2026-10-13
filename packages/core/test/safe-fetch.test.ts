@@ -1,8 +1,8 @@
 /** The production metadata fetch refuses private addresses where it connects, not just in the URL. */
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
-import { publicOnlyLookup, safeFetch } from "../src/safe-fetch.ts";
+import { describe, expect, it, vi } from "vitest";
+import { safeFetch } from "../src/safe-fetch.ts";
 
 describe("safeFetch", () => {
 	it("refuses a hostname that resolves to loopback", async () => {
@@ -17,13 +17,20 @@ describe("safeFetch", () => {
 		}
 	});
 
-	it("answers the list of addresses Node 20+ asks for", async () => {
-		const { lookup } = await import("node:dns");
-		const hook = publicOnlyLookup(lookup);
-		// IP literals resolve without the network.
-		const all = await new Promise((resolve, reject) => hook("8.8.8.8", { all: true }, (error, addresses) => (error ? reject(error) : resolve(addresses))));
-		expect(all).toEqual([{ address: "8.8.8.8", family: 4 }]);
-		const one = await new Promise((resolve, reject) => hook("8.8.8.8", {}, (error, address, family) => (error ? reject(error) : resolve({ address, family }))));
-		expect(one).toEqual({ address: "8.8.8.8", family: 4 });
+	it("connects to a public address on Node 20+", async () => {
+		// Node 20+ asks the socket's lookup for every address (happy eyeballs). Treat loopback as public so a real connection runs.
+		vi.resetModules();
+		vi.doMock("../src/clients.ts", () => ({ isPrivateHost: () => false }));
+		const { safeFetch: connect } = await import("../src/safe-fetch.ts");
+		const server = createServer((_req, res) => res.end("{}"));
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as AddressInfo;
+		try {
+			const response = await connect(`http://localhost:${port}/client.json`);
+			expect(await response.text()).toBe("{}");
+		} finally {
+			server.close();
+			vi.doUnmock("../src/clients.ts");
+		}
 	});
 });

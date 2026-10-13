@@ -108,7 +108,7 @@ pnpm mutants      # break each rule on purpose; its check must fail
 pnpm quickstart   # run docs/quickstart.md as written in a fresh Next.js app
 ```
 
-To release, set the version in `packages/core/package.json`, commit, and push a tag such as `v0.2.0`. The `release` workflow reruns every gate and stages it on npm through trusted publishing, with no token; release it with `npm stage approve`. Project rules are in [AGENTS.md](AGENTS.md).
+Versions follow the spec: poppyseed `X.Y.*` implements Poppy `X.Y`, and the patch number is ours. To release, set the version in `packages/core/package.json`, commit, and push a tag such as `v0.2.0`. The `release` workflow reruns every gate and stages it on npm through trusted publishing, with no token; release it with `npm stage list poppyseed`, then `npm stage approve <stage-id>`. Project rules are in [AGENTS.md](AGENTS.md).
 
 ## License
 

@@ -228,10 +228,10 @@ export function parseClientMetadata(input: unknown, fetchedFrom: string): Client
 /** Literal loopback, private and link-local hosts. DNS rebinding needs a resolver-level guard as well. */
 export function isPrivateHost(hostname: string): boolean {
 	let host = hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase();
-	// IPv4-mapped IPv6 (URL parsing normalizes [::ffff:169.254.169.254] to [::ffff:a9fe:a9fe]).
-	const mappedDotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
+	// IPv4 inside IPv6: mapped (::ffff:) and NAT64 (64:ff9b::). URL parsing normalizes [::ffff:169.254.169.254] to [::ffff:a9fe:a9fe].
+	const mappedDotted = /^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(host);
 	if (mappedDotted) host = mappedDotted[1]!;
-	const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+	const mapped = /^(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
 	if (mapped) {
 		const [hi, lo] = [parseInt(mapped[1]!, 16), parseInt(mapped[2]!, 16)];
 		host = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;

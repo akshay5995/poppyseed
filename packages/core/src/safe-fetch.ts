@@ -10,13 +10,14 @@ type LookupCallback = (error: Error | null, address: string | LookupAddress[], f
  * single one fails every connection with ERR_INVALID_IP_ADDRESS. Any private
  * address refuses the host, so a mixed answer can't slip one in.
  */
-export function publicOnlyLookup(lookup: typeof dnsLookup) {
+function publicOnlyLookup(lookup: typeof dnsLookup) {
 	return (hostname: string, options: LookupOptions, callback: LookupCallback) => {
 		lookup(hostname, { ...options, all: true }, (error, addresses) => {
 			const none = options.all ? [] : "";
 			if (error) return callback(error, none);
+			if (addresses.some(({ address }) => isPrivateHost(address))) return callback(new Error(`${hostname} resolves to a private address`), none);
 			const [first] = addresses;
-			if (!first || addresses.some(({ address }) => isPrivateHost(address))) return callback(new Error(`${hostname} resolves to a private address`), none);
+			if (!first) return callback(new Error(`${hostname} resolves to no address`), none);
 			if (options.all) return callback(null, addresses);
 			callback(null, first.address, first.family);
 		});

@@ -117,7 +117,7 @@ export const identityChecks = [
 		{ id: "identity/private-agent-urls", title: "Agent metadata on loopback or private addresses is refused", covers: ["guide.private-addresses"], leg: 1, expect: INVALID_CLIENT },
 		(t) => {
 			if (!t.target.strictAgentUrls) t.skip("the target accepts loopback agents (strictAgentUrls is off)");
-			return ["127.0.0.1", "10.0.0.8", "localhost", "localhost.", "[::ffff:169.254.169.254]", "[::ffff:127.0.0.1]"].map((host) => {
+			return ["127.0.0.1", "10.0.0.8", "localhost", "localhost.", "[::ffff:169.254.169.254]", "[::ffff:127.0.0.1]", "[64:ff9b::10.0.0.8]"].map((host) => {
 				const clientId = new URL(`https://${host}/client.json`).toString();
 				return { label: `client_id ${clientId}`, agent: { clientId, serve: true } };
 			});
