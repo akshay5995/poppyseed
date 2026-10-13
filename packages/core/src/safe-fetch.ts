@@ -1,5 +1,27 @@
+import type { LookupAddress, LookupOptions, lookup as dnsLookup } from "node:dns";
 import type { IncomingMessage } from "node:http";
 import { isPrivateHost } from "./clients.ts";
+
+type LookupCallback = (error: Error | null, address: string | LookupAddress[], family?: number) => void;
+
+/**
+ * The socket's DNS lookup, refusing private addresses. Node 20+ connects with
+ * happy eyeballs and asks for every address (`all: true`); answering with a
+ * single one fails every connection with ERR_INVALID_IP_ADDRESS. Any private
+ * address refuses the host, so a mixed answer can't slip one in.
+ */
+export function publicOnlyLookup(lookup: typeof dnsLookup) {
+	return (hostname: string, options: LookupOptions, callback: LookupCallback) => {
+		lookup(hostname, { ...options, all: true }, (error, addresses) => {
+			const none = options.all ? [] : "";
+			if (error) return callback(error, none);
+			const [first] = addresses;
+			if (!first || addresses.some(({ address }) => isPrivateHost(address))) return callback(new Error(`${hostname} resolves to a private address`), none);
+			if (options.all) return callback(null, addresses);
+			callback(null, first.address, first.family);
+		});
+	};
+}
 
 /**
  * Fetches agent metadata on Node, refusing private addresses at connect time
@@ -18,13 +40,7 @@ export async function safeFetch(input: RequestInfo | URL, init: RequestInit = {}
 			{
 				method: "GET",
 				headers,
-				lookup: (hostname: string, options: object, callback: (error: Error | null, address: string, family: number) => void) => {
-					lookup(hostname, { ...options, all: false }, (error, address, family) => {
-						if (error) return callback(error, "", 0);
-						if (isPrivateHost(address)) return callback(new Error(`${hostname} resolves to a private address`), "", 0);
-						callback(null, address, family);
-					});
-				},
+				lookup: publicOnlyLookup(lookup),
 				signal: init.signal ?? undefined,
 			},
 			(res: IncomingMessage) => {

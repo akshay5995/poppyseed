@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
-import { safeFetch } from "../src/safe-fetch.ts";
+import { publicOnlyLookup, safeFetch } from "../src/safe-fetch.ts";
 
 describe("safeFetch", () => {
 	it("refuses a hostname that resolves to loopback", async () => {
@@ -17,4 +17,13 @@ describe("safeFetch", () => {
 		}
 	});
 
+	it("answers the list of addresses Node 20+ asks for", async () => {
+		const { lookup } = await import("node:dns");
+		const hook = publicOnlyLookup(lookup);
+		// IP literals resolve without the network.
+		const all = await new Promise((resolve, reject) => hook("8.8.8.8", { all: true }, (error, addresses) => (error ? reject(error) : resolve(addresses))));
+		expect(all).toEqual([{ address: "8.8.8.8", family: 4 }]);
+		const one = await new Promise((resolve, reject) => hook("8.8.8.8", {}, (error, address, family) => (error ? reject(error) : resolve({ address, family }))));
+		expect(one).toEqual({ address: "8.8.8.8", family: 4 });
+	});
 });
