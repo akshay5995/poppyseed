@@ -30,6 +30,7 @@ export const MUTANTS: Mutant[] = [
 	{ name: "IPv4-mapped hosts are public", file: "clients.ts", find: "if (mapped) {", replace: "if (false) {", caughtBy: "identity/private-agent-urls" },
 	{ name: "skip client_id match", file: "clients.ts", find: "if (obj.client_id !== fetchedFrom) throw", replace: "if (false) throw", caughtBy: "identity/client-id-must-match" },
 	{ name: "keys on any domain", file: "clients.ts", find: "if (URL.parse(uri)?.hostname !== host) throw", replace: "if (false) throw", caughtBy: "identity/keys-same-domain" },
+	{ name: "accept embedded keys", file: "clients.ts", find: "if (header.jwk || header.jku || header.x5u) throw", replace: "if (false) throw", caughtBy: "identity/assertion-lifetime" },
 	{ name: "allow long assertions", file: "clients.ts", find: "const maxLifetime = kind === \"browser\" ? 60 : 120;", replace: "const maxLifetime = kind === \"browser\" ? 60 : 3600;", caughtBy: "identity/assertion-lifetime" },
 	{ name: "client sub unchecked", file: "clients.ts", find: 'if (kind === "client" && payload.sub !== clientId) throw', replace: "if (false) throw", caughtBy: "identity/client-assertion-claims" },
 	{ name: "assertions replayable", file: "clients.ts", find: 'if (!fresh) throw fail("assertion was already used");', replace: "", caughtBy: "identity/client-assertion-replay" },

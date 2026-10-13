@@ -91,7 +91,7 @@ export class ClientRegistry {
 		} catch {
 			throw fail("malformed assertion");
 		}
-		if (header.jwk || header.jku || header.x5u) throw fail("assertion must not carry its own key");
+		if (header.jwk || header.jku || header.x5u) throw fail("assertion must not carry its own key: sign it with a key published at your jwks_uri, and keep your DPoP key separate");
 		// A browser assertion only joins a browser; nothing else is accepted where one is expected (spec 5).
 		if ((header.typ === BROWSER_ASSERTION_TYP) !== (kind === "browser")) throw fail(`assertion typ must ${kind === "browser" ? "" : "not "}be ${BROWSER_ASSERTION_TYP}`);
 
