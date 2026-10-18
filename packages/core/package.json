@@ -43,8 +43,8 @@
     }
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8",
-    "next": "^16.4.0"
+    "@electric-sql/pglite": "^0.5.10",
+    "next": "^16.4.1"
   },
   "files": [
     "dist",
