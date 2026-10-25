@@ -68,6 +68,7 @@ The profile is optional; `--profile` takes precedence.
 | `connections(person)`, `disconnect(person, clientId)` | Read and change the account's connected agents | Connected-agent settings |
 | `endSession(sessionId)` | Ends a Session, named by its Session Key's thumbprint | Ending Sessions, ended keys refused, cookies not outliving them |
 | `staffJoin(conversationId)`, `staffReply(conversationId, text)` | Act as a person taking a handoff | Handoff to a person |
+| `staffCallTool(conversationId, name, input)` | That person calls a tool, returning `{ kind }` | Staff held to the Session's access after sign-out |
 | `lastCode()` | Returns the last Mediated Sign-In one-time code | Mediated Sign-In codes |
 | `performed(operationId)` | The terms each run of `perform` got for an operation | Performing once, only the confirmed revision, website confirms |
 | `settle(operationId, state, summary)` | Records an outcome `perform` couldn't tell | Unknown outcomes staying `in_progress` |

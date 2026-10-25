@@ -27,6 +27,8 @@ export interface Hooks {
 	staffJoin?: (conversationId: string) => Promise<void>;
 	/** That person writes in the conversation. */
 	staffReply?: (conversationId: string, text: string) => Promise<void>;
+	/** That person calls a tool in the conversation, with its caller's access. Returns what the call came to: "output", "operation", "authorization" or "error". */
+	staffCallTool?: (conversationId: string, name: string, input: Record<string, unknown>) => Promise<{ kind: string }>;
 	/** The one-time code most recently sent for Mediated Sign-In. */
 	lastCode?: () => Promise<string>;
 	/** The terms `perform` has run with for an operation, one entry per run. */

@@ -2,6 +2,7 @@ import { invalidRequest, PoppyError, scopeError } from "./errors.ts";
 import { guardedFrom, type Guarded } from "./guard.ts";
 import { canonical, strictJson } from "./json.ts";
 import type { OperationView } from "./operations.ts";
+import { loadSession } from "./records.ts";
 import type { Store } from "./store.ts";
 import type { ToolInfo, ToolResult, Tools } from "./tools.ts";
 import type { ResolvedConfig, SessionContext } from "./types.ts";
@@ -349,7 +350,7 @@ export class Conversations {
 	async callTool(id: string, name: string, input: unknown): Promise<ToolResult> {
 		const c = await this.store.get<ConversationRecord>(key.conversation(id));
 		if (!c) throw notFound();
-		const ctx = c.caller;
+		const ctx = await this.current(c.caller);
 		const scope = this.tools.list.find((t) => t.name === name)?.scope;
 		if (scope && !ctx.account?.scopes.includes(scope)) {
 			// A message can't authorize an account action: ask for the scope, in the conversation (spec 7.11).
@@ -373,6 +374,18 @@ export class Conversations {
 	}
 
 	// ---- Internals ----
+
+	/**
+	 * The last caller as their Session is now. A conversation outlives a sign-in
+	 * (spec 4.9), so its stored caller may hold scopes the Session no longer has.
+	 */
+	private async current(caller: SessionContext): Promise<SessionContext> {
+		if (!caller.account) return caller;
+		const session = await loadSession(this.store, caller.sessionId, { clientId: caller.clientId, userId: caller.userId });
+		const signedIn = session?.account?.id === caller.account.id ? session.account.signedIn : null;
+		const scopes = signedIn ? caller.account.scopes.filter((s) => signedIn.scopes.includes(s)) : [];
+		return { ...caller, account: scopes.length > 0 ? { id: caller.account.id, scopes } : null };
+	}
 
 	/** A conversation the caller may use (spec 7.2, 7.11), or conversation_not_found. */
 	private async owned(id: string, ctx: SessionContext): Promise<ConversationRecord> {

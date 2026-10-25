@@ -384,6 +384,12 @@ export const conversationChecks = [
 			await agent.revoke(token.refresh_token);
 			const renewed = await agent.startSession({ session: token.session });
 			await t.refused("the conversation's own Session after signing out", agent.events(renewed.access_token, id), { status: 403, error: "insufficient_scope" });
+			// Staff act with the conversation's caller, as the Session is now: signed out (spec 7.9, 7.11).
+			const staffCallTool = t.target.hooks?.staffCallTool;
+			if (staffCallTool) {
+				const scoped = t.profile("scopedTool");
+				t.equal((await staffCallTool(id, scoped.name, scoped.arguments)).kind, "authorization", "a person at the Company calling a scoped tool after the sign-out");
+			} else t.note("give the target a staffCallTool hook to check that staff can't use a revoked sign-in");
 			const back = await t.signInDirect(agent, token.session, { scope: read });
 			t.ok((await agent.events(back.access_token, id)).status !== "closed", "the conversation stayed open through the sign-out");
 			t.equal((await agent.sendMessage(back.access_token, id, agent.message("Back again."))).httpStatus, 202, "and continues after signing in again");

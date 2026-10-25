@@ -92,7 +92,7 @@ for (const line of sums.trim().split("\n")) {
 }
 const recorded = RECONCILED.exec(readFileSync(readmePath, "utf8"))?.[1];
 if (recorded !== sha256(sums)) {
-	problems.push("the official spec in spec/source changed since spec/pap-${SPEC_VERSION} was last reconciled. Compare them, update spec/pap-${SPEC_VERSION}, then run: pnpm spec:reconciled");
+	problems.push(`the official spec in spec/source changed since spec/pap-${SPEC_VERSION} was last reconciled. Compare them, update spec/pap-${SPEC_VERSION}, then run: pnpm spec:reconciled`);
 }
 const ids = new Set(requirements.map((r) => r.id));
 const byId = new Map(requirements.map((r) => [r.id, r]));

@@ -209,6 +209,7 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 		disconnect: (person, clientId) => company.connections.disconnect(people[person].id, clientId),
 		staffJoin: (id) => conversations.join(id),
 		staffReply: (id, text) => conversations.reply(id, text),
+		staffCallTool: async (id, name, input) => ({ kind: (await conversations.callTool(id, name, input)).kind }),
 		lastCode: async () => lastCode,
 		performed: async (id) => performed.get(id) ?? [],
 		settle: (id, state, summary) => company.operations.settle(id, state, { summary }),

@@ -141,6 +141,7 @@ export const MUTANTS: Mutant[] = [
 	{ name: "metadata redirects followed", file: "clients.ts", find: "redirect: \"manual\",", replace: "redirect: \"follow\",", caughtBy: "guide/client-fetch" },
 
 	// 0.3
+	{ name: "conversations act on a revoked sign-in", file: "conversations.ts", find: "const ctx = await this.current(c.caller);", replace: "const ctx = c.caller;", caughtBy: "conv/account-bound" },
 	{ name: "Session assertions to any audience", file: "clients.ts", find: "if (payload.aud !== this.config.urls.issuer) throw", replace: "if (typeof payload.aud !== \"string\") throw", caughtBy: "sessions/assertion-aud" },
 	{ name: "ended Session keys start new Sessions", file: "records.ts", find: "throw invalidGrant(\"the Session has ended; start a new Session with a new key\");", replace: "", caughtBy: "sessions/ended-session" },
 	{ name: "codes not bound to the Session Key", file: "oauth.ts", find: "if (binding.jkt !== record.jkt) throw", replace: "if (false) throw", caughtBy: "direct/code-exchange" },
