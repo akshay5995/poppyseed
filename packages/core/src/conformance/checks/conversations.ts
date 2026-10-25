@@ -433,20 +433,22 @@ export const conversationChecks = [
 			t.ok(events.length >= 3, "the conversation has at least three events");
 			const [first, second] = events;
 			const url = `${agent.endpoint("conversations")}/${id}/events?cursor=${first!.id}`;
-			const response = await agent.dpopFetch(url, token.access_token, { headers: { accept: "text/event-stream", "last-event-id": second!.id } });
+			const response = await agent.dpopFetch(url, token.access_token, { headers: { accept: "text/event-stream", "last-event-id": second!.id }, signal: AbortSignal.timeout(10_000) });
 			if (!response.headers.get("content-type")?.includes("text/event-stream")) {
 				await response.body?.cancel();
 				t.skip("the company doesn't stream events");
 			}
 			const reader = response.body!.getReader();
 			let text = "";
-			while (!/^id: /m.test(text)) {
+			// SSE allows "id:x" and "id: x", and lines may end in CRLF.
+			const idLine = /^id: ?(.*?)\r?$/m;
+			while (!idLine.test(text)) {
 				const chunk = await reader.read();
 				if (chunk.done) break;
 				text += new TextDecoder().decode(chunk.value);
 			}
 			await reader.cancel();
-			const firstId = /^id: (.+)$/m.exec(text)?.[1];
+			const firstId = idLine.exec(text)?.[1];
 			t.equal(firstId, events[2]!.id, "the stream starts after Last-Event-ID, not after cursor");
 		},
 	}),

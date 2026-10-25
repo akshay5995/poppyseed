@@ -178,7 +178,7 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 			{ task: "Transfer my account to someone else" },
 		],
 		// A report of a task the company does offer gets an alternative; the rest are noted.
-		feedback: ({ task }) => (/note/i.test(task) ? { instructions: "Notes are saved with the write_note tool.", references: [{ tool: "write_note" }] } : undefined),
+		feedback: ({ task }) => (/\b(write|save|add)\b.*\bnote/i.test(task) ? { instructions: "Notes are saved with the write_note tool.", references: [{ tool: "write_note" }] } : undefined),
 		conversations: { agent: scripted, handoff: { available: () => true }, retainEvents: 30, maxWait: 5 },
 	});
 
