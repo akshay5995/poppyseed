@@ -1,5 +1,5 @@
 import type { ClientRegistry } from "./clients.ts";
-import { invalidRequest, PoppyError } from "./errors.ts";
+import { invalidRequest, PoppyError, scopeError } from "./errors.ts";
 import type { Guarded } from "./guard.ts";
 import { canonical, strictJson } from "./json.ts";
 import type { Store } from "./store.ts";
@@ -39,7 +39,8 @@ export type OperationRecord = {
 	id: string;
 	tool: string;
 	key?: string;
-	owner: { sessionId: string; clientId: string; userId: string; accountId: string | null };
+	/** Proposed signed in: the account, and the scopes the proposing token had, for the error a signed-out Session gets (extension 3.2). */
+	owner: { sessionId: string; clientId: string; userId: string; account: { id: string; scopes: string[] } | null };
 	scope: string | null;
 	revision: number;
 	summary: string;
@@ -108,14 +109,14 @@ export class Operations {
 	 */
 	async propose(name: string, tool: OperationTool, input: unknown, ctx: SessionContext): Promise<OperationRecord> {
 		const proposal = await tool.operation.propose(input, ctx);
-		const owner = { sessionId: ctx.sessionId, clientId: ctx.clientId, userId: ctx.userId, accountId: ctx.account?.id ?? null };
+		const owner = { sessionId: ctx.sessionId, clientId: ctx.clientId, userId: ctx.userId, account: ctx.account };
 		const expiresAt = Date.now() + (proposal.expiresIn ?? 15 * 60) * 1000;
 		const terms = { summary: proposal.summary, terms: proposal.terms, userApprovalRequired: proposal.userApprovalRequired ?? false, url: proposal.url, expiresAt };
 		const fresh = (): OperationRecord => ({ id: randomId("op"), tool: name, key: proposal.key, owner, scope: tool.scope, revision: 1, state: "proposed", confirmation: null, result: null, ...terms });
 		if (proposal.key === undefined) return this.save(fresh());
 
 		// The same action in the same Session (or account) is one operation, whichever channel proposes it.
-		const indexKey = `operation-key:${owner.accountId ? `acct:${owner.clientId}:${owner.userId}:${owner.accountId}` : `ses:${owner.sessionId}`}:${name}:${proposal.key}`;
+		const indexKey = `operation-key:${owner.account ? `acct:${owner.clientId}:${owner.userId}:${owner.account.id}` : `ses:${owner.sessionId}`}:${name}:${proposal.key}`;
 		for (;;) {
 			const existingId = await this.store.get<string>(indexKey);
 			const existing = existingId ? await this.read(existingId) : undefined;
@@ -156,10 +157,17 @@ export class Operations {
 	async owned(id: string, ctx: SessionContext): Promise<OperationRecord> {
 		const op = await this.read(id);
 		const o = op?.owner;
-		// Its own Session, or any Session of the same agent and User signed in to the account it was proposed under.
-		const mine =
-			o && (o.sessionId === ctx.sessionId || (o.accountId !== null && o.accountId === ctx.account?.id && o.clientId === ctx.clientId && o.userId === ctx.userId));
-		if (!op || !mine) throw new PoppyError(404, "operation_not_found", "no such operation for this Session");
+		const notFound = () => new PoppyError(404, "operation_not_found", "no such operation for this Session");
+		if (!op || !o) throw notFound();
+		// Proposed signed out: its own Session only.
+		if (o.account === null) {
+			if (o.sessionId !== ctx.sessionId) throw notFound();
+			return op;
+		}
+		// Proposed signed in: any Session of the same agent and User signed in to that account now, the original one included.
+		if (o.clientId !== ctx.clientId || o.userId !== ctx.userId) throw notFound();
+		if (ctx.account === null) throw scopeError(op.scope ?? o.account.scopes.join(" "));
+		if (ctx.account.id !== o.account.id) throw notFound();
 		return op;
 	}
 

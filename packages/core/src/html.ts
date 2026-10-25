@@ -39,6 +39,7 @@ fieldset label{display:flex;gap:10px;align-items:flex-start;padding:6px 0}input[
 label[for]{display:block;font-weight:600;margin:8px 0 6px}
 input[name=user_code]{width:100%;font:600 1.3rem ui-monospace,monospace;letter-spacing:.15em;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);text-transform:uppercase}
 .fine{color:var(--muted);font-size:.85rem}.error{color:#c0362c}
+.new{color:var(--accent);font-size:.8rem;margin-left:6px}
 .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
 button{font:inherit;font-weight:600;border-radius:8px;padding:10px 18px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-fg);cursor:pointer}
 button.secondary{background:transparent;color:var(--fg);border-color:var(--line)}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}

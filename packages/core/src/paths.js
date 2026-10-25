@@ -17,6 +17,8 @@ export const PATHS = {
 	tools: "/poppy/tools",
 	operations: "/poppy/operations",
 	conversations: "/poppy/conversations",
+	feedback: "/poppy/feedback",
+	excludedTasks: "/poppy/excluded-tasks.json",
 };
 
 /**
@@ -43,4 +45,6 @@ export const ROUTES = [
 	`${PATHS.operations}/:id/:action`,
 	PATHS.conversations,
 	`${PATHS.conversations}/:id/:action`,
+	PATHS.feedback,
+	PATHS.excludedTasks,
 ];

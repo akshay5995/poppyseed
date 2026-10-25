@@ -38,7 +38,7 @@ export async function mcpEndpoint(request: Request, tools: Tools, serverName: st
 
 	switch (rpc.method) {
 		case "initialize":
-			return rpcResult(rpc.id, { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: serverName, version: "poppyseed-0.1" } });
+			return rpcResult(rpc.id, { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: serverName, version: "poppyseed-0.3" } });
 		case "ping":
 			return rpcResult(rpc.id, {});
 		case "tools/list":
@@ -58,12 +58,8 @@ async function callTool(rpc: RpcRequest, tools: Tools, auth: Guarded): Promise<R
 	switch (result.kind) {
 		case "error":
 			if (result.code === "unknown_tool") return rpcError(rpc.id, -32602, result.message);
-			// A tool result, not a protocol error, so the agent's model can read it.
-			return rpcResult(rpc.id, {
-				isError: true,
-				content: text(result.message),
-				...(result.code === "extension_required" ? { structuredContent: { error: result.code, error_description: result.message, extension: "operations" } } : {}),
-			});
+			// A tool result, not a protocol error, so the agent's model can read it. An MCP server can't refuse one tool with extension_required (spec 6).
+			return rpcResult(rpc.id, { isError: true, content: text(result.message) });
 		case "operation": {
 			// Extension 4.2: the operation in structuredContent, its summary as text.
 			const op = result.operation;

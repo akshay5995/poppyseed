@@ -1,6 +1,6 @@
 {
   "name": "poppyseed",
-  "version": "0.1.1",
+  "version": "0.3.0",
   "description": "Implements the Personal Agent Protocol (Poppy for short) in Next.js: discovery, sign-in, tools over MCP and OpenAPI, operations people approve, and conversations. Includes a test agent and the conformance suite.",
   "type": "module",
   "license": "MIT",
@@ -43,8 +43,8 @@
     }
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8",
-    "next": "^16.4.0"
+    "@electric-sql/pglite": "^0.5.11",
+    "next": "^16.4.1"
   },
   "files": [
     "dist",

@@ -10,7 +10,7 @@ export type ToolResult =
 	| { kind: "output"; output: unknown }
 	| { kind: "operation"; operation: OperationView }
 	/** The caller lacks a scope. Only conversations report this as a result; APIs answer with a challenge. */
-	| { kind: "authorization"; error: "sign_in_required" | "insufficient_scope"; scope: string }
+	| { kind: "authorization"; error: "insufficient_scope"; scope: string }
 	| { kind: "error"; code: "unknown_tool" | "invalid_input" | "tool_error" | "failed" | "extension_required"; message: string };
 
 export interface ToolInfo {

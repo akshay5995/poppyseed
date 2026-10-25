@@ -1,6 +1,6 @@
 # Poppyseed
 
-Let personal AI agents use your Next.js site. Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org/) (Poppy for short, draft 0.1): agents find your site, sign people in with their consent, call your tools, and buy only what people approve.
+Let personal AI agents use your Next.js site. Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org/) (Poppy for short, draft 0.3): agents find your site, sign people in with their consent, call your tools, and buy only what people approve.
 
 **[withpoppyseed.dev](https://withpoppyseed.dev)**. Using a coding agent? Copy the prompt from the site and paste it in.
 
@@ -62,7 +62,7 @@ See the [Guides](docs/guides.md).
 
 ## Verified
 
-A conformance suite checks the spec's company-side rules over HTTP. Through a Next.js production server Poppyseed passes 98 checks and fails none; the one skipped needs a public agent URL. Each check is proven by breaking its rule on purpose. Run it against your site:
+A conformance suite checks the spec's company-side rules over HTTP. Through a Next.js production server Poppyseed passes 104 checks and fails none; the one skipped needs a public agent URL. Each check is proven by breaking its rule on purpose. Run it against your site:
 
 ```sh
 npx poppyseed check http://localhost:3000
@@ -108,7 +108,7 @@ pnpm mutants      # break each rule on purpose; its check must fail
 pnpm quickstart   # run docs/quickstart.md as written in a fresh Next.js app
 ```
 
-Versions follow the spec: poppyseed `X.Y.*` implements Poppy `X.Y`, and the patch number is ours. To release, set the version in `packages/core/package.json`, commit, and push a tag such as `v0.2.0`. The `release` workflow reruns every gate and stages it on npm through trusted publishing, with no token; release it with `npm stage list poppyseed`, then `npm stage approve <stage-id>`. Project rules are in [AGENTS.md](AGENTS.md).
+Versions follow the spec: poppyseed `X.Y.*` implements Poppy `X.Y`, and the patch number is ours. To release, set the version in `packages/core/package.json`, commit, and push a tag such as `v0.3.0`. The `release` workflow reruns every gate and stages it on npm through trusted publishing, with no token; release it with `npm stage list poppyseed`, then `npm stage approve <stage-id>`. Project rules are in [AGENTS.md](AGENTS.md).
 
 ## License
 

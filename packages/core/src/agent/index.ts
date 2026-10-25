@@ -1,7 +1,9 @@
-import { exportJWK, generateKeyPair, SignJWT, type JWK, type JWTHeaderParameters } from "jose";
+import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT, type JWK, type JWTHeaderParameters } from "jose";
 import type { Fetch } from "./types.ts";
 
-export { Browser, type ConsentForm } from "./browser.ts";
+import type { Browser } from "./browser.ts";
+
+export { Browser, type BrowserSessionForm, type ConsentForm } from "./browser.ts";
 export { httpAgentHost, memoryAgentHost, type AgentHost, type HostedAgentOptions, type RecordedRequest } from "./host.ts";
 export type * from "./types.ts";
 
@@ -40,20 +42,23 @@ export interface PoppyDocument {
 	web?: { browser_session_endpoint?: string };
 	auth?: {
 		issuer: string;
-		custom_scopes?: Record<string, string>;
-		direct?: { scopes: string[] };
-		device?: { scopes: string[] };
+		/** Descriptions of scopes no OpenAPI description describes (spec 4.4). */
+		scopes?: Record<string, string>;
 		mediated?: { endpoint: string; scopes: string[]; fields: { name: string; label: string; secret: boolean }[] };
 	};
+	feedback?: { endpoint: string };
+	excluded_tasks?: { url: string };
 	extensions?: { operations?: { version: string; endpoint: string } } & Record<string, { version: string } | undefined>;
 }
 
-/** OAuth Authorization Server Metadata with poppy_domains (spec 3.2). */
+/** OAuth Authorization Server Metadata with protected_resources (spec 3.2). */
 export interface AuthorizationServerMetadata {
 	issuer: string;
 	token_endpoint: string;
 	revocation_endpoint: string;
-	poppy_domains: string[];
+	grant_types_supported: string[];
+	protected_resources: string[];
+	scopes_supported?: string[];
 	authorization_endpoint?: string;
 	device_authorization_endpoint?: string;
 	[member: string]: unknown;
@@ -67,18 +72,27 @@ export interface Endpoints {
 	operations?: string;
 	browserSession?: string;
 	mediated?: string;
+	feedback?: string;
+	excludedTasks?: string;
+}
+
+/** A Session's own DPoP key pair (spec 4.3). Its thumbprint, `jkt`, names the Session at the Company. */
+export interface SessionKey {
+	jkt: string;
+	keys: Keys;
 }
 
 export interface TokenResponse {
 	access_token: string;
 	token_type: "DPoP" | "Bearer";
 	expires_in: number;
-	scope: string;
-	session_id: string;
-	signed_in: boolean;
+	/** Absent on a signed-out token, and on a signed-in one granted exactly the scopes requested. */
+	scope?: string;
 	/** The Account Token, after a sign-in. */
 	refresh_token?: string;
 	refresh_token_expires_in?: number;
+	/** Not from the Company: the Session Key this agent bound the token to, which names its Session. */
+	session: SessionKey;
 }
 
 export interface ConversationMessage {
@@ -139,7 +153,7 @@ export interface OperationReply {
 }
 
 export type MediatedResponse =
-	| ({ status: "complete" } & TokenResponse)
+	| ({ status: "complete" } & Omit<TokenResponse, "session"> & { session?: SessionKey })
 	| { status: "code_required"; sign_in_id: string; code?: { sent_to: string }; expires_at: string }
 	| { status: "failed" | "expired" }
 	| { error: string; error_description?: string };
@@ -153,12 +167,19 @@ export interface DeviceAuthorization {
 	interval: number;
 }
 
-/** A Direct Sign-In request, with the PKCE verifier to send at the exchange. */
+/** A Direct Sign-In request, with the PKCE verifier to send at the exchange and the Session Key the code is bound to. */
 export interface AuthorizationRequest {
 	url: string;
 	state: string;
 	verifier: string;
 	redirectUri: string;
+	session: SessionKey;
+}
+
+/** An alternative way to do a task (spec 8.2). */
+export interface Alternative {
+	instructions?: string;
+	references?: ({ type: "openapi"; url: string; operation_id: string } | { type: "mcp"; url: string; tool: string } | { type: "web"; url: string } | { type: string; url?: string })[];
 }
 
 /** Options for signing an assertion (client, session or browser). Defaults produce a valid one. */
@@ -185,6 +206,9 @@ export type AssertionSpec = string | (AssertionOptions & { subject?: string; aud
 /** Options for a DPoP proof. Defaults produce a valid one. */
 export interface ProofOptions {
 	accessToken?: string;
+	/** The Session Key to sign with. Default: the key the access token is bound to, or the newest Session's. */
+	session?: SessionKey;
+	nonce?: string;
 	/** Override htm (otherwise the request method). */
 	htm?: string;
 	/** Override htu (otherwise the request URL without query). */
@@ -203,7 +227,9 @@ export interface ProofOptions {
 }
 
 export interface TokenRequestOptions {
-	/** An MCP URL: asks for a Bearer token for it, sent without DPoP. */
+	/** The Session Key that names the Session and signs the proof. Default a new one: a new Session. */
+	session?: SessionKey;
+	/** Asks for a token for one service, such as the MCP server's URL (spec 4.3). */
 	resource?: string;
 	/** The DPoP proof, how to bend the default one, or null for none. */
 	dpop?: ProofOptions | string | null;
@@ -213,8 +239,6 @@ export interface TokenRequestOptions {
 }
 
 export interface StartSessionOptions extends TokenRequestOptions {
-	/** Renews this Session instead of starting one. */
-	sessionId?: string;
 	/** The session assertion; `subject` presents another user id than this agent's own. */
 	assertion?: AssertionSpec;
 }
@@ -247,9 +271,10 @@ export async function readBody(response: Response): Promise<unknown> {
 	}
 }
 
-type Keys = Awaited<ReturnType<typeof generateKeyPair>> & { publicJwk: JWK; privateJwk: JWK };
+/** A key pair, with both halves as JWKs. */
+export type Keys = Awaited<ReturnType<typeof generateKeyPair>> & { publicJwk: JWK; privateJwk: JWK };
 
-type AgentKeys = { signing: Keys; dpop: Keys; stranger: Keys };
+type AgentKeys = { signing: Keys; stranger: Keys };
 
 async function newKeys(kid?: string): Promise<Keys> {
 	const pair = await generateKeyPair("ES256", { extractable: true });
@@ -271,6 +296,9 @@ export class TestAgent {
 	private discovered?: Discovery;
 	/** Stable pairwise user id per company issuer. Random, never derived from PII. */
 	private readonly userIds = new Map<string, string>();
+	/** The Session Key each token is bound to, so proofs are signed with the right one. */
+	private readonly tokenKeys = new Map<string, SessionKey>();
+	private latestKey?: SessionKey;
 
 	/** Use TestAgent.create(), which makes the keys. */
 	constructor(options: TestAgentOptions, keys: AgentKeys) {
@@ -281,7 +309,7 @@ export class TestAgent {
 	}
 
 	static async create<T>(this: new (options: TestAgentOptions, keys: AgentKeys) => T, options: TestAgentOptions): Promise<T> {
-		return new this(options, { signing: await newKeys("k1"), dpop: await newKeys(), stranger: await newKeys() });
+		return new this(options, { signing: await newKeys("k1"), stranger: await newKeys() });
 	}
 
 	get jwksUri(): string {
@@ -314,19 +342,28 @@ export class TestAgent {
 		return this.keys.signing.publicJwk;
 	}
 
-	/** Discovers a company and binds this agent to it: every other call talks to it. */
+	/** Discovers a company and binds this agent to it: every other call talks to it (spec 3). */
 	async discover(origin: string): Promise<Discovery> {
 		const base = new URL(origin);
 		if (base.protocol !== "https:" && !this.options.allowInsecure) throw new Error("companies must use HTTPS");
-		const poppy = await this.getJson<PoppyDocument>(new URL("/.well-known/poppy.json", base).toString());
-		if (!poppy.protocol_version?.startsWith("0.")) throw new Error(`unsupported protocol_version ${poppy.protocol_version}`);
-		const strip = (h: string) => h.toLowerCase().replace(/^www\./, "");
-		if (strip(poppy.organization.domain) !== strip(base.hostname)) throw new Error("organization.domain does not match the host");
+		const wellKnown = await this.fetcher(new URL("/.well-known/poppy.json", base).toString(), { headers: { accept: "application/json" } });
+		// After redirects, only a document at the well-known path itself speaks for its host. In-process fetches report no URL.
+		const served = wellKnown.url ? new URL(wellKnown.url) : new URL("/.well-known/poppy.json", base);
+		if (served.pathname !== "/.well-known/poppy.json" || served.search) throw new Error(`poppy.json was redirected to ${served}, which is not a well-known URL`);
+		const poppy = await this.expectJson<PoppyDocument>(wellKnown);
+		if (poppy.protocol_version !== "0.3") throw new Error(`unsupported protocol_version ${poppy.protocol_version}`);
+		// Domains are compared ignoring case, with no other normalization.
+		if (poppy.organization.domain.toLowerCase() !== served.hostname.toLowerCase()) throw new Error("organization.domain is not the host that served poppy.json");
 		if (!poppy.auth?.issuer) throw new Error("poppy.json has no auth.issuer");
 
-		const metadata = await this.getJson<AuthorizationServerMetadata>(new URL("/.well-known/oauth-authorization-server", poppy.auth.issuer).toString());
+		const issuer = new URL(poppy.auth.issuer);
+		// RFC 8414: the well-known part goes between the issuer's host and its path.
+		const metadataUrl = `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname === "/" ? "" : issuer.pathname}`;
+		const metadata = await this.getJson<AuthorizationServerMetadata>(metadataUrl);
 		if (metadata.issuer !== poppy.auth.issuer) throw new Error("issuer metadata does not match auth.issuer");
-		if (!metadata.poppy_domains?.includes(poppy.organization.domain)) throw new Error("poppy_domains does not list this domain");
+		const resource = `https://${poppy.organization.domain}`.toLowerCase();
+		const listed = (metadata.protected_resources ?? []).some((r) => /^https:\/\/[^/]+$/.test(r) && r.toLowerCase() === resource);
+		if (!listed) throw new Error("protected_resources does not list this domain");
 		const api = (type: string) => poppy.apis?.find((entry) => entry.type === type)?.url;
 		const endpoints: Endpoints = {
 			mcp: api("mcp"),
@@ -335,6 +372,8 @@ export class TestAgent {
 			operations: poppy.extensions?.operations?.endpoint,
 			browserSession: poppy.web?.browser_session_endpoint,
 			mediated: poppy.auth.mediated?.endpoint,
+			feedback: poppy.feedback?.endpoint,
+			excludedTasks: poppy.excluded_tasks?.url,
 		};
 		this.discovered = { origin: base.origin, poppy, metadata, endpoints };
 		return this.discovered;
@@ -365,30 +404,45 @@ export class TestAgent {
 		return id;
 	}
 
-	/** Starts (or, with `sessionId`, renews) a signed-out Session. */
+	/** A new Session Key. Each Session has its own, and a key never serves another Session (spec 4.3). */
+	async newSessionKey(): Promise<SessionKey> {
+		const keys = await newKeys();
+		return { jkt: await calculateJwkThumbprint(keys.publicJwk, "sha256"), keys };
+	}
+
+	/** Starts a signed-out Session with a new Session Key, or with `session` renews that Session (spec 4.2). */
 	async startSession(options: StartSessionOptions = {}): Promise<TokenResponse> {
 		const params: Record<string, string> = {
 			grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-			assertion: await this.assertion(options.assertion, this.userId, this.company.metadata.token_endpoint),
+			assertion: await this.assertion(options.assertion, this.userId, this.company.metadata.issuer),
 		};
-		if (options.sessionId) params.session_id = options.sessionId;
 		return this.token(params, options);
 	}
 
-	/** POSTs a grant to the token endpoint, authenticated with a client assertion and bound with DPoP unless `resource` asks for MCP. */
-	async tokenRequest(params: Record<string, string>, options: TokenRequestOptions = {}): Promise<Response> {
+	/** POSTs a grant to the token endpoint, authenticated with a client assertion and bound with a proof from the Session Key. */
+	async tokenRequest(params: Record<string, string>, options: TokenRequestOptions = {}): Promise<{ response: Response; session: SessionKey }> {
 		const url = this.company.metadata.token_endpoint;
-		const { resource, dpop = resource ? null : {} } = options;
-		const proof = typeof dpop === "object" && dpop !== null ? await this.dpopProof("POST", url, dpop) : dpop;
-		return this.formPost(url, resource ? { ...params, resource } : params, options, proof ? { dpop: proof } : {});
+		const session = options.session ?? (await this.newSessionKey());
+		const { resource, dpop = {} } = options;
+		const proof = typeof dpop === "object" && dpop !== null ? await this.dpopProof("POST", url, { session, ...dpop }) : dpop;
+		const response = await this.formPost(url, resource ? { ...params, resource } : params, options, proof ? { dpop: proof } : {});
+		return { response, session };
 	}
 
 	async token(params: Record<string, string>, options: TokenRequestOptions = {}): Promise<TokenResponse> {
-		return this.expectJson(await this.tokenRequest(params, options));
+		const { response, session } = await this.tokenRequest(params, options);
+		const token = { ...(await this.expectJson<Omit<TokenResponse, "session">>(response)), session };
+		this.tokenKeys.set(token.access_token, session);
+		this.latestKey = session;
+		return token;
 	}
 
-	/** Starts Direct Sign-In (spec 4.5): the URL to open in the User's browser, with PKCE S256. */
-	async authorizationRequest(scope: string, options: { redirectUri?: string; challengeMethod?: string; omitChallenge?: boolean } = {}): Promise<AuthorizationRequest> {
+	/** Starts Direct Sign-In (spec 4.5) for a Session: the URL to open in the User's browser, with PKCE S256 and the code bound to the Session Key. */
+	async authorizationRequest(
+		scope: string,
+		session: SessionKey,
+		options: { redirectUri?: string; challengeMethod?: string; omitChallenge?: boolean; omitJkt?: boolean } = {},
+	): Promise<AuthorizationRequest> {
 		const endpoint = this.company.metadata.authorization_endpoint;
 		if (!endpoint) throw new Error("the company does not offer Direct Sign-In");
 		const verifier = randomJti() + randomJti();
@@ -400,13 +454,14 @@ export class TestAgent {
 			url.searchParams.set("code_challenge", await sha256b64url(verifier));
 			url.searchParams.set("code_challenge_method", options.challengeMethod ?? "S256");
 		}
-		return { url: url.toString(), state, verifier, redirectUri };
+		if (!options.omitJkt) url.searchParams.set("dpop_jkt", session.jkt);
+		return { url: url.toString(), state, verifier, redirectUri, session };
 	}
 
-	/** Exchanges a Direct Sign-In code, signing `sessionId` in. */
-	exchangeCode(request: AuthorizationRequest, code: string, sessionId: string, options: TokenRequestOptions & { verifier?: string } = {}): Promise<TokenResponse> {
-		const params = { grant_type: "authorization_code", code, code_verifier: options.verifier ?? request.verifier, redirect_uri: request.redirectUri, session_id: sessionId };
-		return this.token(params, options);
+	/** Exchanges a Direct Sign-In code with a proof from the request's Session Key, signing that Session in. */
+	exchangeCode(request: AuthorizationRequest, code: string, options: TokenRequestOptions & { verifier?: string } = {}): Promise<TokenResponse> {
+		const params = { grant_type: "authorization_code", code, code_verifier: options.verifier ?? request.verifier, redirect_uri: request.redirectUri };
+		return this.token(params, { session: request.session, ...options });
 	}
 
 	/** Starts Device Sign-In (spec 4.6). */
@@ -416,15 +471,26 @@ export class TestAgent {
 		return this.expectJson(await this.formPost(endpoint, { scope }));
 	}
 
-	/** One poll of the token endpoint for a Device Sign-In. */
-	pollDevice(deviceCode: string, sessionId: string, options: TokenRequestOptions = {}): Promise<TokenResponse> {
-		return this.token({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: deviceCode, session_id: sessionId }, options);
+	/**
+	 * Whether a device sign-in link may be shown for this company: its host is
+	 * the issuer's host or the host of a URL in `protected_resources`, or a
+	 * subdomain of either (spec 4.6).
+	 */
+	mayShowVerificationUri(uri: string): boolean {
+		const host = URL.parse(uri)?.hostname.toLowerCase();
+		if (!host) return false;
+		const hosts = [this.company.metadata.issuer, ...this.company.metadata.protected_resources].flatMap((u) => URL.parse(u)?.hostname.toLowerCase() ?? []);
+		return hosts.some((h) => host === h || host.endsWith(`.${h}`));
 	}
 
-	/** Uses an Account Token (spec 4.8). Omit `sessionId` to start a new signed-in Session. */
-	refresh(accountToken: string, options: TokenRequestOptions & { sessionId?: string; scope?: string } = {}): Promise<TokenResponse> {
+	/** One poll of the token endpoint for a Device Sign-In, with a proof from the Session Key to sign in. */
+	pollDevice(deviceCode: string, session: SessionKey, options: TokenRequestOptions = {}): Promise<TokenResponse> {
+		return this.token({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: deviceCode }, { session, ...options });
+	}
+
+	/** Uses an Account Token (spec 4.8): with `session`, for that Session; otherwise it starts a new signed-in Session. */
+	refresh(accountToken: string, options: TokenRequestOptions & { scope?: string } = {}): Promise<TokenResponse> {
 		const params: Record<string, string> = { grant_type: "refresh_token", refresh_token: accountToken };
-		if (options.sessionId) params.session_id = options.sessionId;
 		if (options.scope !== undefined) params.scope = options.scope;
 		return this.token(params, options);
 	}
@@ -432,6 +498,31 @@ export class TestAgent {
 	/** Signs the User out by revoking the Account Token (spec 4.9). */
 	async revoke(accountToken: string): Promise<void> {
 		await this.expectJson(await this.formPost(this.company.metadata.revocation_endpoint, { token: accountToken, token_type_hint: "refresh_token" }));
+	}
+
+	/**
+	 * Joins a browser to a Session (spec 5): loads the browser-session page in
+	 * that browser, signs a proof over its code with the Session Key, and has
+	 * the browser submit the form. Returns the Company's response.
+	 */
+	async joinBrowser(browser: Browser, session: SessionKey, options: { proof?: ProofOptions; code?: string } = {}): Promise<Response> {
+		const form = await browser.openBrowserSession(this.endpoint("browserSession"));
+		const code = options.code ?? form.code;
+		const proof = await this.dpopProof("POST", form.action, { session, nonce: code, ...options.proof });
+		return browser.post(form.action, new URLSearchParams({ code, proof }));
+	}
+
+	/** Reads the tasks the company chose not to offer (spec 8.1), with no token. */
+	async excludedTasks(): Promise<{ tasks: { task: string; alternative?: Alternative }[] }> {
+		return this.getJson(this.endpoint("excludedTasks"));
+	}
+
+	/** Reports a task the User couldn't do (spec 8.3). Returns the HTTP status and the alternative, if the company sent one. */
+	async feedback(token: string, report: { kind: string; task: string; description: string }): Promise<{ httpStatus: number; alternative: Alternative | null }> {
+		const response = await this.dpopJson(this.endpoint("feedback"), token, report);
+		const body = await this.parse<Alternative | null>(response);
+		if (!response.ok) throw new PapError(response.status, body, response.headers.get("www-authenticate"));
+		return { httpStatus: response.status, alternative: body };
 	}
 
 	/** Mediated Sign-In (spec 4.7): sends credentials, or a one-time code for `signInId`, with a DPoP Session Token. */
@@ -442,7 +533,14 @@ export class TestAgent {
 	): Promise<{ httpStatus: number; headers: Headers; body: MediatedResponse }> {
 		const endpoint = this.endpoint("mediated");
 		const response = await this.dpopJson(signInId ? `${endpoint}/${encodeURIComponent(signInId)}` : endpoint, token, body);
-		return { httpStatus: response.status, headers: response.headers, body: await this.parse(response) };
+		const parsed = await this.parse<MediatedResponse>(response);
+		// The signed-in token is bound to the same Session Key as the token that signed in.
+		const session = this.tokenKeys.get(token);
+		if (session && "status" in parsed && parsed.status === "complete") {
+			this.tokenKeys.set(parsed.access_token, session);
+			return { httpStatus: response.status, headers: response.headers, body: { ...parsed, session } };
+		}
+		return { httpStatus: response.status, headers: response.headers, body: parsed };
 	}
 
 	/** Reads an operation at the operations endpoint (operations extension 6). */
@@ -488,8 +586,8 @@ export class TestAgent {
 		return { id: `msg_${randomJti()}`, sender: "agent", ...(text !== undefined ? { text } : {}), ...extra };
 	}
 
-	/** Calls an MCP JSON-RPC method with a Bearer session token and returns its result. Notifications (no id) return undefined. */
-	async mcp<T = unknown>(url: string, token: string | null, method: string, params?: Record<string, unknown>, options: { notification?: boolean } = {}): Promise<T> {
+	/** Calls an MCP JSON-RPC method with a DPoP Session Token issued for the server, and returns its result. Notifications (no id) return undefined. */
+	async mcp<T = unknown>(url: string, token: string | null, method: string, params?: Record<string, unknown>, options: { notification?: boolean; scheme?: "DPoP" | "Bearer" } = {}): Promise<T> {
 		const response = await this.mcpRaw(url, token, method, params, options);
 		if (options.notification) {
 			if (response.status !== 202) throw new PapError(response.status, await readBody(response), response.headers.get("www-authenticate"));
@@ -505,11 +603,14 @@ export class TestAgent {
 		return this.mcp(url, token, "initialize", { protocolVersion: MCP_VERSION, capabilities: {}, clientInfo: { name: "poppyseed-test-agent", version: "0.1.0" } });
 	}
 
-	mcpRaw(url: string, token: string | null, method: string, params?: Record<string, unknown>, options: { notification?: boolean } = {}): Promise<Response> {
+	/** One MCP request. With a token it carries a DPoP proof, unless `scheme` is Bearer. */
+	async mcpRaw(url: string, token: string | null, method: string, params?: Record<string, unknown>, options: { notification?: boolean; scheme?: "DPoP" | "Bearer" } = {}): Promise<Response> {
 		const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": MCP_VERSION };
-		if (token) headers.authorization = `Bearer ${token}`;
 		const message = options.notification ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", id: crypto.randomUUID(), method, params };
-		return this.fetcher(url, { method: "POST", headers, body: JSON.stringify(message) });
+		const init = { method: "POST", headers, body: JSON.stringify(message) };
+		if (!token) return this.fetcher(url, init);
+		if (options.scheme === "Bearer") return this.fetcher(url, { ...init, headers: { ...headers, authorization: `Bearer ${token}` } });
+		return this.dpopFetch(url, token, init);
 	}
 
 	/** Calls a DPoP-protected endpoint. */
@@ -537,20 +638,16 @@ export class TestAgent {
 		};
 		if (options.accessToken) claims.ath = await sha256b64url(options.accessToken);
 		if (options.ath) claims.ath = options.ath;
-		const { dpop, stranger } = this.keys;
-		const keys = options.otherKey ? stranger : dpop;
+		if (options.nonce !== undefined) claims.nonce = options.nonce;
+		const session = options.session ?? (options.accessToken ? this.tokenKeys.get(options.accessToken) : undefined) ?? this.latestKey ?? (await this.newSessionKey());
+		const { stranger } = this.keys;
+		const keys = options.otherKey ? stranger : session.keys;
 		const jwk = options.leakPrivateKey ? keys.privateJwk : keys.publicJwk;
-		const key = options.wrongSigningKey ? (options.otherKey ? dpop : stranger).privateKey : keys.privateKey;
+		const key = options.wrongSigningKey ? (options.otherKey ? session.keys : stranger).privateKey : keys.privateKey;
 		return new SignJWT(claims).setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk }).sign(key);
 	}
 
-	/** Signs a browser assertion (spec 5) for joining `sessionId` and landing on `returnTo`. */
-	browserAssertion(sessionId: string, returnTo: string, options: AssertionOptions & { subject?: string; audience?: string } = {}): Promise<string> {
-		const claims = { session_id: sessionId, return_to: returnTo, ...options.claims };
-		return this.signAssertion(options.subject ?? this.userId, options.audience ?? this.endpoint("browserSession"), { typ: "poppy-browser+jwt", ...options, claims });
-	}
-
-	/** Signs a client assertion (subject = clientId), session assertion (subject = user id) or browser assertion. */
+	/** Signs a client assertion (subject = clientId) or a session assertion (subject = user id). Both are addressed to the issuer. */
 	async signAssertion(subject: string, audience: string, options: AssertionOptions = {}): Promise<string> {
 		const now = Math.floor(Date.now() / 1000) + (options.iatOffset ?? 0);
 		const claims = { iss: options.issuer ?? this.clientId, sub: subject, aud: audience, iat: now, exp: now + (options.lifetime ?? 60), jti: options.jti ?? randomJti(), ...options.claims };
@@ -573,7 +670,7 @@ export class TestAgent {
 			...params,
 			client_id: this.clientId,
 			client_assertion_type: "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-			client_assertion: await this.assertion(options.clientAssertion, this.clientId, url),
+			client_assertion: await this.assertion(options.clientAssertion, this.clientId, this.company.metadata.issuer),
 		});
 		for (const field of options.omit ?? []) form.delete(field);
 		return this.fetcher(url, { method: "POST", headers: { ...FORM, ...headers }, body: form.toString() });

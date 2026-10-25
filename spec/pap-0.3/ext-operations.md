@@ -1,6 +1,6 @@
 # Operations extension, version 1
 
-Source: [extensions/operations.md](../source/docs/extensions/operations.md).
+Source: [extensions/operations.md](../source/docs/0.3/extensions/operations.md).
 
 ## ops.2 Advertising support
 
@@ -11,6 +11,7 @@ Source: [extensions/operations.md](../source/docs/extensions/operations.md).
 - **MUST** · company · `ops.endpoint` — The operations endpoint accepts DPoP Session Tokens. *(implied)*
 - **MAY** · company · `ops.resource` — The extension entry may include a `resource` to require tokens issued for it.
 - **MUST NOT** · company · `ops.require-extension` — A Company does not return operations to a Personal Agent that doesn't list the extension; it either performs the action as it would without the extension, or refuses with `extension_required`.
+- **MUST** · company · `ops.mcp-tool-error` — An MCP tool that needs the extension returns an ordinary tool error to a Personal Agent that doesn't list it, since an MCP server can't refuse a single tool call with `extension_required`. *(implied)*
 
 ## ops.3 Operations
 
@@ -28,7 +29,7 @@ Fields: `operation_id`, `revision`, `state`, `summary`, `terms`, `expires_at` (w
 
 ## ops.3.2 Who can use an operation
 
-- **MUST** · company · `ops.access` — An operation belongs to the Session it was proposed in and, if that Session is signed in, to the account, and the Company returns `operation_not_found` to anyone else. *(implied)*
+- **MUST** · company · `ops.access` — An operation proposed signed out can be used only in its Session; one proposed signed in can be used by any Session of the same Personal Agent and User while it is signed in to the same account at the time of the request, a signed-out Session of that Personal Agent and User gets `insufficient_scope`, and anyone else gets `operation_not_found`. *(implied)*
 - **MUST** · company · `ops.readable` — The Company keeps an operation readable at least until it is final.
 
 ## ops.4 Proposing an operation
@@ -44,6 +45,7 @@ Fields: `operation_id`, `revision`, `state`, `summary`, `terms`, `expires_at` (w
 - **MUST** · agent · `ops.approval` — Before confirming, the Personal Agent has the User's approval for the revision, by the User (`approved_by: "user"`) or by a standing permission, which is not allowed when `user_approval_required` is true.
 - **MUST** · agent · `ops.show-summary` — The Personal Agent shows the User the Company's name and the revision's `summary`, and takes the User's answer through its own interface.
 - **MUST NOT** · agent · `ops.company-text-not-approval` — The Personal Agent does not treat text from the Company, such as a conversation message, as the User's approval.
+- **SHOULD** · agent · `ops.show-terms` — When the revision has `terms`, the Personal Agent shows the User the values that matter next to the `summary`, or checks that they agree with it, before asking for approval.
 - **MUST** · agent · `ops.standing-permission` — A standing permission covers the Company, the account, the action and every term of the revision, and is still in effect.
 - **MUST** · agent · `ops.approval-per-revision` — An approval covers one revision, so a new revision needs a new approval unless a standing permission covers it. *(implied)*
 
@@ -51,7 +53,7 @@ Fields: `operation_id`, `revision`, `state`, `summary`, `terms`, `expires_at` (w
 
 `POST {endpoint}/{operation_id}/confirm` with `{"revision", "approved_by"}`.
 
-- **MUST** · company · `ops.confirm-checks` — Before performing the action, the Company checks that the Session Token may use the operation, that it has the needed scopes (`insufficient_scope` or `sign_in_required`), that `revision` is the latest (`terms_changed` with the current operation), and that `approved_by` is allowed (`user_approval_required`). *(implied)*
+- **MUST** · company · `ops.confirm-checks` — Before performing the action, the Company checks that the Session Token may use the operation, that it has the needed scopes (`insufficient_scope`), that `revision` is the latest (`terms_changed` with the current operation), and that `approved_by` is allowed (`user_approval_required`). *(implied)*
 - **MUST** · company · `ops.confirm-idempotent` — Confirming an operation that is not `proposed` or has expired returns the operation as it is and does nothing else. *(implied)*
 - **MUST** · company · `ops.confirm-progress` — A confirmed operation moves to `in_progress`; the response carries the final state if the action finishes within a few seconds, or `in_progress` with `Retry-After`, and it continues even if the Session Token expires or the User signs out. *(implied)*
 
@@ -73,4 +75,4 @@ Fields: `operation_id`, `revision`, `state`, `summary`, `terms`, `expires_at` (w
 
 ## ops.9 Errors
 
-- **MUST** · company · `ops.errors` — The operations endpoint returns JSON errors: `operation_not_found` 404, `terms_changed` 409 with the current operation, `user_approval_required` 403, and `extension_required` 403 from other channels. *(implied)*
+- **MUST** · company · `ops.errors` — The operations endpoint returns JSON errors: `operation_not_found` 404, `terms_changed` 409 with the current operation, `user_approval_required` 403, and `rate_limited` 429 with `Retry-After`. *(implied)*

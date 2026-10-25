@@ -12,6 +12,7 @@ import { mcpChecks } from "./mcp.ts";
 import { operationChecks } from "./operations.ts";
 import { sessionChecks } from "./sessions.ts";
 import { signInChecks } from "./signin.ts";
+import { taskChecks } from "./tasks.ts";
 
 /** Every check, in report order. Add new files here. */
-export const checks: Check[] = [...discoveryChecks, ...identityChecks, ...sessionChecks, ...dpopChecks, ...mcpChecks, ...apiChecks, ...signInChecks, ...accountChecks, ...operationChecks, ...conversationChecks, ...webChecks, ...mediatedChecks, ...hardeningChecks];
+export const checks: Check[] = [...discoveryChecks, ...identityChecks, ...sessionChecks, ...dpopChecks, ...mcpChecks, ...apiChecks, ...signInChecks, ...accountChecks, ...operationChecks, ...conversationChecks, ...webChecks, ...mediatedChecks, ...taskChecks, ...hardeningChecks];

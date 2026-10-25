@@ -32,17 +32,17 @@ export function invalidDpop(description: string, status: 400 | 401): PoppyError 
 	return new PoppyError(status, "invalid_dpop_proof", description, { wwwAuthenticate: `DPoP error="invalid_dpop_proof"` });
 }
 
-export const invalidSession = (description: string) => new PoppyError(400, "invalid_session", description);
+export const invalidTarget = (description: string) => new PoppyError(400, "invalid_target", description);
 
-export function invalidToken(scheme: "DPoP" | "Bearer", description: string, extra = ""): PoppyError {
-	return new PoppyError(401, "invalid_token", description, { wwwAuthenticate: `${scheme} error="invalid_token"${extra}` });
+/** `extra` adds challenge parameters, such as an MCP server's resource_metadata (spec 6). */
+export function invalidToken(description: string, extra = ""): PoppyError {
+	return new PoppyError(401, "invalid_token", description, { wwwAuthenticate: `DPoP error="invalid_token"${extra}` });
 }
 
-/** A signed-out session needs to sign in, or a signed-in one needs more scope. */
-export function scopeError(scheme: "DPoP" | "Bearer", signedIn: boolean, scope: string): PoppyError {
-	const code = signedIn ? "insufficient_scope" : "sign_in_required";
-	return new PoppyError(403, code, signedIn ? `requires scope ${scope}` : "sign in to continue", {
-		wwwAuthenticate: `${scheme} error="${code}", scope="${scope}"`,
+/** The token lacks `scope`. A signed-out token has no scopes, so this is also how a request asks for sign-in (spec 6). */
+export function scopeError(scope: string, extra = ""): PoppyError {
+	return new PoppyError(403, "insufficient_scope", `requires scope ${scope}`, {
+		wwwAuthenticate: `DPoP error="insufficient_scope", scope="${scope}"${extra}`,
 	});
 }
 

@@ -3,7 +3,7 @@ import { expect, it } from "vitest";
 import { Sealer, type SessionTokenClaims } from "../src/tokens.ts";
 
 const later = Math.floor(Date.now() / 1000) + 60;
-const claims = (exp: number): SessionTokenClaims => ({ sid: "ses_1", cid: "https://a.example/c.json", uid: "usr_1", scope: "", typ: "dpop", jkt: "x", exp });
+const claims = (exp: number): SessionTokenClaims => ({ sid: "ses_1", cid: "https://a.example/c.json", uid: "usr_1", scope: "", exp });
 const sealer = new Sealer("s".repeat(32));
 
 it("opens only its own, unexpired values for the same purpose", async () => {

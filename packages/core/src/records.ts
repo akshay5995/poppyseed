@@ -1,14 +1,17 @@
 import { base64url } from "jose";
-import { accountMismatch, invalidSession } from "./errors.ts";
+import { accountMismatch, invalidGrant } from "./errors.ts";
 import type { Store } from "./store.ts";
 import { randomId, sha256 } from "./util.ts";
 
 /**
- * A Session: one User at this Company through one Personal Agent (spec 4).
- * It exists while its store record does: the store's expiry ends it, and
- * ending it early deletes the record.
+ * A Session: one User at this Company through one Personal Agent (spec 4),
+ * named by the thumbprint of its Session Key (spec 4.3). It exists while its
+ * store record does: the store's expiry ends it, and ending it early deletes
+ * the record. A second record remembers the key for longer, so an ended
+ * Session's key gets invalid_grant instead of starting a new Session (spec 4.2).
  */
 export interface SessionRecord {
+	/** The Session Key's JWK thumbprint. */
 	id: string;
 	clientId: string;
 	userId: string;
@@ -44,7 +47,8 @@ export interface Connection {
 }
 
 export const key = {
-	session: (id: string) => `session:${id}`,
+	session: (jkt: string) => `session:${jkt}`,
+	sessionKey: (jkt: string) => `session-key:${jkt}`,
 	once: (value: string) => `once:${value}`,
 	accountToken: (hash: string) => `account-token:${hash}`,
 	connections: (accountId: string) => `connections:${accountId}`,
@@ -71,15 +75,27 @@ export async function loadSession(store: Store, id: string, owner: { clientId: s
 	return session && session.clientId === owner.clientId && (owner.userId === undefined || session.userId === owner.userId) ? session : undefined;
 }
 
-/** The Session `id` names for this owner, or a new one when `id` is null; invalid_session for anyone else's. */
-export async function sessionFor(store: Store, id: string | null, owner: { clientId: string; userId: string }, ttlMs: number): Promise<SessionRecord> {
-	if (id) {
-		const session = await loadSession(store, id, owner);
-		if (!session) throw invalidSession("the Session has ended or belongs to a different Personal Agent or User");
+/**
+ * The Session a Session Key names (spec 4.2): its own if it belongs to this
+ * owner, a new one for a key never seen, and invalid_grant for anyone else's
+ * Session or a Session that has ended.
+ */
+export async function sessionFor(store: Store, jkt: string, owner: { clientId: string; userId: string }, ttlMs: number): Promise<SessionRecord> {
+	const mine = (session: SessionRecord | undefined) => {
+		if (session && (session.clientId !== owner.clientId || session.userId !== owner.userId)) throw invalidGrant("the Session Key names a Session of a different Personal Agent or User");
 		return session;
+	};
+	const existing = mine(await store.get<SessionRecord>(key.session(jkt)));
+	if (existing) return existing;
+	// Remembered for a Session lifetime past its end (guide: Sessions and session keys).
+	if (!(await store.add(key.sessionKey(jkt), true, { expiresAt: Date.now() + 2 * ttlMs }))) {
+		// Known key: a Session another request is creating right now, or one that has ended.
+		const created = mine(await store.get<SessionRecord>(key.session(jkt)));
+		if (created) return created;
+		throw invalidGrant("the Session has ended; start a new Session with a new key");
 	}
-	const session: SessionRecord = { id: randomId("ses"), ...owner, expiresAt: Date.now() + ttlMs, account: null };
-	await store.set(key.session(session.id), session, { expiresAt: session.expiresAt });
+	const session: SessionRecord = { id: jkt, ...owner, expiresAt: Date.now() + ttlMs, account: null };
+	await store.set(key.session(jkt), session, { expiresAt: session.expiresAt });
 	return session;
 }
 
@@ -98,7 +114,7 @@ export async function signInSession(store: Store, sessionId: string, accountId: 
 		return { ...current, account: { id: accountId, signedIn: { scopes, tokenHash } } };
 	});
 	if (mismatch) throw accountMismatch();
-	if (!session) throw invalidSession("the Session has ended");
+	if (!session) throw invalidGrant("the Session has ended");
 	await store.update<AccountTokenRecord>(key.accountToken(tokenHash), (record) =>
 		record && !record.sessions.includes(sessionId) ? { ...record, sessions: [...record.sessions, sessionId] } : undefined,
 	);

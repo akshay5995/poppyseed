@@ -151,7 +151,8 @@ export const Works: React.FC = () => {
 
 /** The booking the recorded demo journey really proposed, as its summary and price. */
 const proposal = STEPS.find((s) => s.id === "propose")?.lines[1] ?? "";
-const price = /\$[\d,]+(\.\d\d)?/.exec(proposal)?.[0]?.replace(/\.00$/, "") ?? "";
+// The amount charged, not a fee the summary mentions earlier, such as "changes $75.00".
+const price = /(\$[\d,]+(?:\.\d\d)?) will be charged/.exec(proposal)?.[1]?.replace(/\.00$/, "") ?? "";
 
 export const Grow: React.FC = () => {
 	const frame = useCurrentFrame();
@@ -165,7 +166,7 @@ export const Grow: React.FC = () => {
 					title="poppyseed.config.ts"
 					lines={[
 						"book_flight: tool({",
-						'  scope: "poppy:write", // needs sign-in',
+						'  scope: "trips:write", // needs sign-in',
 						"  input: z.object({ offer_id: z.string() }),",
 						"  operation: {",
 						"    propose: (input) => ({ summary, terms }),",

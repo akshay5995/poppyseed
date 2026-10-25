@@ -8,13 +8,13 @@ A Personal Agent finds the company at /.well-known/poppy.json, proves who it is,
 - `identity` client assertions, metadata fetching, registration.
 - `sessions` JWT-bearer Sessions, renewal, ending.
 - `dpop` proofs at the token endpoint and at APIs.
-- `tools` MCP (Bearer) and OpenAPI (DPoP) tool calls, scopes, Idempotency-Key, rate limits.
+- `tools` MCP and OpenAPI tool calls, both with DPoP Session Tokens, scopes, Idempotency-Key, rate limits.
 
 ## How to get to it (user POV)
 
 - An agent GETs `/.well-known/poppy.json` and `/.well-known/oauth-authorization-server`.
 - It POSTs a jwt-bearer grant to `/oauth/token`.
-- It calls `/mcp` with a Bearer token, or `POST /poppy/tools/<name>` with a DPoP token.
+- It calls `/mcp` with a DPoP token issued for the MCP server, or `POST /poppy/tools/<name>` with a DPoP token.
 
 ## Driving it with fixture.sh
 

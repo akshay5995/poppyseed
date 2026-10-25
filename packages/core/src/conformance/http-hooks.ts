@@ -1,6 +1,6 @@
 import type { Fetch, Hooks, TargetProfile } from "../agent/index.ts";
 
-const HOOKS = ["endSession", "siteSignIn", "connections", "disconnect", "staffJoin", "staffReply", "lastCode", "performed", "settle"] as const satisfies readonly (keyof Hooks)[];
+const HOOKS = ["endSession", "siteSignIn", "connections", "disconnect", "staffJoin", "staffReply", "staffCallTool", "lastCode", "performed", "settle"] as const satisfies readonly (keyof Hooks)[];
 
 /**
  * Company-side powers over HTTP, for a company running as a real server.

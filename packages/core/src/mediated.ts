@@ -15,14 +15,15 @@ import { json, randomId } from "./util.ts";
  * or returned. Attempts are rate limited, and unusual sign-ins need a code.
  */
 
-/** A sign-in waiting for its one-time code. Only the Session that started it can finish it. */
-interface PendingSignIn extends Grant {
-	sessionId: string;
-	clientId: string;
-	codeHash: string;
-	attempts: number;
-	expiresAt: number;
-}
+/**
+ * A sign-in that needed a one-time code, until it completes, fails or
+ * expires. Only the Session that started it can use it. A failed one is kept
+ * until it expires, so a late code gets `failed` again (spec 4.7).
+ */
+type PendingSignIn = { sessionId: string; clientId: string; expiresAt: number } & (
+	| ({ status: "code_required"; codeHash: string; attempts: number } & Grant)
+	| { status: "failed" }
+);
 
 const MAX_CODE_ATTEMPTS = 5;
 const CODE_TTL_MS = 10 * 60_000;
@@ -31,14 +32,14 @@ const NO_STORE = { "cache-control": "no-store" };
 /** Fixed-window attempt limits for Mediated Sign-In (guide: Mediated Sign-In). */
 const LIMITS = { perUser: 5, perAccount: 10, windowMs: 15 * 60_000 };
 
-export async function mediatedEndpoint(request: Request, config: ResolvedConfig, clients: ClientRegistry, sealer: Sealer, auth: Guarded & { jkt: string }, signInId: string | undefined): Promise<Response> {
+export async function mediatedEndpoint(request: Request, config: ResolvedConfig, clients: ClientRegistry, sealer: Sealer, auth: Guarded, signInId: string | undefined): Promise<Response> {
 	const mediated = config.signIn?.mediated;
 	if (!mediated) throw new PoppyError(404, "not_found", "Mediated Sign-In is not offered");
 	const body = await strictJson(request);
 	const { ctx } = auth;
 	const client = await clients.load(ctx.clientId);
 	const complete = async (grant: Grant) => {
-		const tokens = await completeSignIn(config, sealer, client, ctx.sessionId, grant, { typ: "dpop", jkt: auth.jkt });
+		const tokens = await completeSignIn(config, sealer, client, grant, { jkt: ctx.sessionId });
 		await mediated.notify?.({ accountId: grant.accountId, clientId: ctx.clientId, clientName: client.meta.client_name });
 		return json({ status: "complete", ...tokens }, 200, NO_STORE);
 	};
@@ -46,19 +47,24 @@ export async function mediatedEndpoint(request: Request, config: ResolvedConfig,
 	if (signInId !== undefined) {
 		const pendingKey = key.mediated(signInId);
 		const pending = await config.store.get<PendingSignIn>(pendingKey);
-		if (!pending || pending.sessionId !== ctx.sessionId || pending.clientId !== ctx.clientId) throw new PoppyError(404, "not_found", "no such sign-in for this Session");
+		// Unknown and another Session's sign-in are the same error.
+		if (!pending || pending.sessionId !== ctx.sessionId || pending.clientId !== ctx.clientId) throw new PoppyError(404, "sign_in_not_found", "no such sign-in for this Session");
 		if (pending.expiresAt <= Date.now()) return json({ status: "expired" }, 200, NO_STORE);
+		if (pending.status === "failed") return json({ status: "failed" }, 200, NO_STORE);
 		const code = typeof body.code === "string" ? body.code.trim() : "";
 		// A right code completes one sign-in, even if it arrives twice at once.
 		if (code && (await secretHash(`${signInId}:${code}`)) === pending.codeHash) {
 			if (!(await claimOnce(config.store, pendingKey, pending.expiresAt))) return json({ status: "failed" }, 200, NO_STORE);
-			return complete(pending);
-		}
-		const updated = await config.store.update<PendingSignIn>(pendingKey, (current) => current && { ...current, attempts: current.attempts + 1 });
-		if (!updated || updated.attempts >= MAX_CODE_ATTEMPTS) {
+			const done = await complete(pending);
 			await config.store.delete(pendingKey);
-			return json({ status: "failed" }, 200, NO_STORE);
+			return done;
 		}
+		const updated = await config.store.update<PendingSignIn>(pendingKey, (current) => {
+			if (current?.status !== "code_required") return undefined;
+			const attempts = current.attempts + 1;
+			return attempts >= MAX_CODE_ATTEMPTS ? { sessionId: current.sessionId, clientId: current.clientId, expiresAt: current.expiresAt, status: "failed" } : { ...current, attempts };
+		});
+		if (updated?.status !== "code_required") return json({ status: "failed" }, 200, NO_STORE);
 		return json(codeRequired(signInId, undefined, updated.expiresAt), 200, NO_STORE);
 	}
 
@@ -84,7 +90,7 @@ export async function mediatedEndpoint(request: Request, config: ResolvedConfig,
 	const id = randomId("sgn");
 	const code = String(crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000).padStart(6, "0");
 	const expiresAt = Date.now() + CODE_TTL_MS;
-	const pending: PendingSignIn = { sessionId: ctx.sessionId, clientId: ctx.clientId, accountId: account.id, scopes, codeHash: await secretHash(`${id}:${code}`), attempts: 0, expiresAt };
+	const pending: PendingSignIn = { status: "code_required", sessionId: ctx.sessionId, clientId: ctx.clientId, accountId: account.id, scopes, codeHash: await secretHash(`${id}:${code}`), attempts: 0, expiresAt };
 	await config.store.set(key.mediated(id), pending, { expiresAt: expiresAt + 60_000 });
 	const { sentTo } = await mediated.sendCode({ accountId: account.id, code });
 	return json(codeRequired(id, sentTo, expiresAt), 200, NO_STORE);

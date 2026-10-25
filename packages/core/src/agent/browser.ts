@@ -18,6 +18,14 @@ export interface ConsentForm {
 	headers: Headers;
 }
 
+/** The browser-session page (spec 5): its form's code, where the form posts, and the response. */
+export interface BrowserSessionForm {
+	code: string;
+	action: string;
+	response: Response;
+	html: string;
+}
+
 export class Browser {
 	private fetcher: Fetch;
 	private cookies = new Map<string, string>();
@@ -42,7 +50,9 @@ export class Browser {
 		const response = await this.fetcher(url, { ...init, headers, redirect: "manual" });
 		for (const line of response.headers.getSetCookie?.() ?? []) {
 			const [name, ...value] = (line.split(";")[0] ?? "").trim().split("=");
-			if (name) this.cookies.set(name, value.join("="));
+			if (!name) continue;
+			if (/;\s*max-age=0/i.test(line)) this.cookies.delete(name);
+			else this.cookies.set(name, value.join("="));
 		}
 		return response;
 	}
@@ -77,6 +87,21 @@ export class Browser {
 		const form = readForm(consent, "data-poppy-consent", entry.action);
 		if (!form) throw new Error(`entering the code did not show a consent form (HTTP ${response.status})`);
 		return { ...form, html: consent, headers: response.headers };
+	}
+
+	/** Loads the browser-session page, as a top-level GET, and reads its form. Throws if it has none. */
+	async openBrowserSession(url: string): Promise<BrowserSessionForm> {
+		const response = await this.request(url);
+		const html = await response.text();
+		const [, open = "", body = ""] = /(<form[^>]*>)([\s\S]*?)<\/form>/.exec(html) ?? [];
+		const code = [...body.matchAll(/<input[^>]*>/g)].map(([input]) => input).find((input) => attr(input, "name") === "code");
+		if (!open || !code) throw new Error(`no browser-session form at ${url} (HTTP ${response.status})`);
+		return { code: unescape(attr(code, "value") ?? ""), action: new URL(unescape(attr(open, "action") ?? ""), url).toString(), response, html };
+	}
+
+	/** Whether this browser holds a cookie with this name. */
+	hasCookie(name: string): boolean {
+		return this.cookies.has(name);
 	}
 
 	post(url: string, body: URLSearchParams): Promise<Response> {

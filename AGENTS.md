@@ -1,6 +1,6 @@
 # Poppyseed
 
-The easiest way to implement the Personal Agent Protocol (Poppy for short; we write PAP only in internal names like `spec/pap-0.1`) in Next.js: `npm install poppyseed`. pnpm monorepo, Node 22. In the repo, Node runs the TypeScript sources directly and vitest tests them; `pnpm pack` compiles the package to `dist/` for npm (`publishConfig` points the published exports there).
+The easiest way to implement the Personal Agent Protocol (Poppy for short; we write PAP only in internal names like `spec/pap-0.3`) in Next.js: `npm install poppyseed`. pnpm monorepo, Node 22. In the repo, Node runs the TypeScript sources directly and vitest tests them; `pnpm pack` compiles the package to `dist/` for npm (`publishConfig` points the published exports there).
 
 The website is https://withpoppyseed.dev: `site/`, with the docs at `/docs`. User-facing docs and READMEs assume the package comes from npm: `npm install poppyseed`, `npx poppyseed agent`, `npx poppyseed check`. Never put monorepo commands (`pnpm --filter …`) or repo-internal paths in them; link into the repository with full GitHub URLs.
 
@@ -18,7 +18,7 @@ Node 22, pnpm 10. `pnpm install` once, then:
 ## Layout
 
 - `spec/source/` is the official text of personalagentprotocol.org, verbatim with SHA-256 sums. Never edit it; the `spec-snapshot` workflow refreshes it.
-- `spec/pap-0.1/*.md` restates every normative sentence of the official text as one requirement line: ``- **MUST** · company · `area.slug` — Text.``
+- `spec/pap-0.3/*.md` restates every normative sentence of the official text as one requirement line: ``- **MUST** · company · `area.slug` — Text.``
 - `spec/STATUS.md` is generated. It shows each rule and what verifies it.
 - `packages/core` is `poppyseed`, the one published package (unscoped; `@poppyseed` belongs to someone else). Each part is its own entry, and the package is `sideEffects: false`, so a site importing `poppyseed` never loads the rest:
   - `src/` (`poppyseed`): the protocol on Web Request/Response, WebCrypto and jose;
@@ -36,6 +36,7 @@ Node 22, pnpm 10. `pnpm install` once, then:
 
 - `spec-update` (`.claude/skills/`): bring the code in line with a change to the official spec.
 - `verify` (`.claude/skills/`): build, start and drive the fixture app to prove `poppyseed/next` end to end, with evidence in `.verify/next/`.
+- `security-check` (`.claude/skills/`): hold a change to the security invariants (tokens, DPoP, ownership, HTML, fetching, supply chain). Run it before every push that changes server code, workflows or dependencies.
 
 ## Gates
 
@@ -47,6 +48,8 @@ Node 22, pnpm 10. `pnpm install` once, then:
 - a shipped check has no mutant in `mutants.data.ts` and no `NOT_MUTATED` reason.
 
 Judge a command by its exit code, never by grepping its output. `pnpm -s` hides the lines a grep would look for.
+
+Run the `security-check` skill on every change before you push, and turn each real gap it finds into a check and a mutant, like any other rule.
 
 Never skip, weaken or delete a check to get green. A failing check means the code or the spec is wrong, so fix whichever one is wrong.
 
@@ -65,7 +68,7 @@ Prove behaviour through the conformance suite, which runs the same checks in-pro
 
 ## Changing protocol behaviour
 
-1. Find the rule in `spec/pap-0.1/`. Every rule must trace to a sentence in `spec/source/`; mark one stated without a BCP 14 keyword `*(implied)*`. Behaviour the official text doesn't define is an implementation choice, not a rule.
+1. Find the rule in `spec/pap-0.3/`. Every rule must trace to a sentence in `spec/source/`; mark one stated without a BCP 14 keyword `*(implied)*`. Behaviour the official text doesn't define is an implementation choice, not a rule.
 2. `pnpm spec:build && pnpm spec:check` lists what is uncovered.
 3. Write a black-box check in `packages/core/src/conformance/checks/`. When the outside view cannot prove the rule, give the reference company a tool, profile entry or hook (`Hooks` in `packages/core/src/agent/types.ts`) that makes it observable.
 4. Add a mutant that only the new check catches.
@@ -80,4 +83,4 @@ When a leg ships, bump `CURRENT_LEG` in `plan.ts`.
 
 ## When the official spec changes
 
-The weekly `spec-snapshot` workflow fails and pushes the new text to the `spec-snapshot` branch. Merge it, and `spec:check` fails until `spec/pap-0.1/` is reconciled. Compare the diff of `spec/source/`, update the requirement lines, then run `pnpm spec:reconciled`.
+The weekly `spec-snapshot` workflow fails and pushes the new text to the `spec-snapshot` branch. Merge it, and `spec:check` fails until `spec/pap-0.3/` is reconciled. Compare the diff of `spec/source/`, update the requirement lines, then run `pnpm spec:reconciled`.

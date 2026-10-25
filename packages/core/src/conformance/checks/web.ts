@@ -1,98 +1,130 @@
-import type { Browser } from "../../agent/index.ts";
+import type { Browser, SessionKey, TestAgent } from "../../agent/index.ts";
 import { check } from "../check.ts";
-import type { Harness, Session } from "../harness.ts";
-
-/** The browser posts the assertion as a form, as the agent's self-submitting page would. */
-function join(browser: Browser, endpoint: string, assertion: string): Promise<Response> {
-	return browser.post(endpoint, new URLSearchParams({ assertion }));
-}
-
-const home = (t: Harness) => `https://${t.company.poppy.organization.domain}/`;
+import type { Harness } from "../harness.ts";
 
 async function accountPage(t: Harness, browser: Browser): Promise<number> {
 	return (await browser.request(t.url(t.profile("web").accountPage))).status;
 }
 
-async function refusedJoin(t: Harness, browser: Browser, endpoint: string, assertion: string, label: string) {
-	const response = await join(browser, endpoint, assertion);
+async function refusedJoin(t: Harness, response: Response, label: string) {
 	t.equal(response.status, 400, `${label}: status`);
-	t.ok(!response.headers.get("set-cookie"), `${label}: no cookie is set`);
+	t.ok(!response.headers.getSetCookie().some((c) => !/max-age=0/i.test(c)), `${label}: no cookie is set`);
 }
 
-/** A fresh anonymous browser joined to a new Session of `agent`, signed in with poppy:read. */
-async function signedInBrowser(t: Harness, { agent }: Session, endpoint: string) {
-	const { session_id: sessionId } = await agent.startSession();
-	await t.signInDirect(agent, sessionId, { scope: "poppy:read" });
+/** A fresh anonymous browser joined to a new Session of `agent`, signed in with the scoped tool's scope. */
+async function signedInBrowser(t: Harness, agent: TestAgent): Promise<{ browser: Browser; session: SessionKey }> {
+	const { session } = await agent.startSession();
+	await t.signInDirect(agent, session, { scope: t.profile("scopedTool").scope });
 	const browser = await t.browser();
-	await join(browser, endpoint, await agent.browserAssertion(sessionId, home(t)));
-	return { browser, sessionId };
+	await agent.joinBrowser(browser, session);
+	return { browser, session };
 }
 
 export const webChecks = [
 	check({
+		id: "web/page",
+		title: "The browser-session page has a form with a fresh code, tied to the browser by a __Host- SameSite=Strict cookie, and can't be cached, framed or kept",
+		covers: ["web.page", "web.code", "web.join-cookie", "web.page-headers", "web.page-no-effect"],
+		leg: 5,
+		async run(t: Harness) {
+			await t.agent();
+			const endpoint = t.endpoint("browserSession");
+			const browser = await t.browser("alice");
+			t.equal(await accountPage(t, browser), 200, "the account page with Alice's own site sign-in");
+			const { code, action, response } = await browser.openBrowserSession(endpoint);
+			t.equal(response.status, 200, "GET the browser-session page");
+			t.ok(response.headers.get("content-type")?.includes("text/html"), "the page is HTML");
+			t.equal(action, endpoint, "the form posts to the endpoint");
+			t.ok(Buffer.from(code.replace(/^[a-z]+_/, ""), "base64url").length >= 16 || code.length >= 22, `the code has at least 128 random bits: ${code}`);
+			t.ok((await browser.openBrowserSession(endpoint)).code !== code, "each load gets a new code");
+
+			const join = response.headers.getSetCookie();
+			t.equal(join.length, 1, "the page sets exactly one cookie, its own");
+			const cookie = join[0] ?? "";
+			t.ok(/^__Host-/.test(cookie), `the cookie uses the __Host- prefix: ${cookie.split("=")[0]}`);
+			for (const [flag, label] of [
+				[/;\s*Secure/i, "Secure"],
+				[/;\s*HttpOnly/i, "HttpOnly"],
+				[/;\s*SameSite=Strict/i, "SameSite=Strict"],
+				[/;\s*Path=\//i, "Path=/"],
+			] as const) {
+				t.ok(flag.test(cookie), `the cookie is ${label}: ${cookie.replace(/=[^;]*/, "=…")}`);
+			}
+			t.ok(!/;\s*Domain=/i.test(cookie), "the cookie has no Domain");
+			const maxAge = Number(/max-age=(\d+)/i.exec(cookie)?.[1] ?? "Infinity");
+			t.ok(maxAge <= 60, `the cookie is short-lived, Max-Age ${maxAge}`);
+
+			t.ok(response.headers.get("cache-control")?.includes("no-store"), "Cache-Control: no-store");
+			t.ok(response.headers.get("content-security-policy")?.includes("frame-ancestors 'none'"), "CSP frame-ancestors 'none'");
+			t.equal(response.headers.get("cross-origin-opener-policy"), "same-origin", "Cross-Origin-Opener-Policy");
+			t.equal(await accountPage(t, browser), 200, "loading the page didn't change the browser's Session or cookies");
+		},
+	}),
+
+	check({
 		id: "web/join",
-		title: "A browser assertion posted in the body joins the Session: 303 to return_to with a Secure, HttpOnly, Lax or None cookie",
-		covers: ["web.response", "web.cookie-flags", "web.assertion", "web.assertion-in-body"],
+		title: "A proof over the page's code, from the Session Key, joins the Session: 303 with a Secure, HttpOnly cookie, and the page's cookie cleared",
+		covers: ["web.response", "web.cookie-flags", "web.cookie-host-prefix", "web.cookie-set-once"],
 		leg: 5,
 		async run(t: Harness) {
 			const { agent, token } = await t.session();
-			const endpoint = t.endpoint("browserSession");
-			const returnTo = `${home(t)}orders`;
-			const response = await join(await t.browser(), endpoint, await agent.browserAssertion(token.session_id, returnTo));
+			const browser = await t.browser();
+			const response = await agent.joinBrowser(browser, token.session);
 			t.equal(response.status, 303, "joining a Session");
-			t.equal(response.headers.get("location"), returnTo, "303 to return_to");
-			const cookie = response.headers.get("set-cookie") ?? "";
-			t.ok(cookie, "a cookie is set");
-			t.ok(/;\s*Secure/i.test(cookie), "the cookie is Secure");
-			t.ok(/;\s*HttpOnly/i.test(cookie), "the cookie is HttpOnly");
-			t.ok(/;\s*SameSite=(Lax|None)/i.test(cookie), `the cookie is SameSite=Lax or None, got ${cookie.match(/SameSite=\w+/i)?.[0] ?? "none"}`);
-
-			const inUrl = await (await t.browser()).request(`${endpoint}?assertion=${encodeURIComponent(await agent.browserAssertion(token.session_id, returnTo))}`, {
-				method: "POST",
-				headers: { "content-type": "application/x-www-form-urlencoded" },
-				body: "",
-			});
-			t.equal(inUrl.status, 400, "an assertion in the URL is refused");
-			t.ok(!inUrl.headers.get("set-cookie"), "and sets no cookie");
+			const location = new URL(response.headers.get("location") ?? "", t.baseUrl);
+			t.ok(location.hostname.toLowerCase().endsWith(t.company.poppy.organization.domain.toLowerCase()), `303 to a page on the website: ${location}`);
+			const cookies = response.headers.getSetCookie();
+			const session = cookies.find((c) => !/max-age=0/i.test(c)) ?? "";
+			t.ok(session, "a cookie is set for the Session");
+			t.ok(/;\s*Secure/i.test(session), "the cookie is Secure");
+			t.ok(/;\s*HttpOnly/i.test(session), "the cookie is HttpOnly");
+			if (!/^__Host-/.test(session)) t.note(`the Session's cookie doesn't use the __Host- prefix (${session.split("=")[0]}); it should unless it covers several hosts`);
+			t.ok(cookies.some((c) => /max-age=0|expires=thu, 01 jan 1970/i.test(c)), "the page's cookie is cleared");
 		},
 	}),
 
 	check({
 		id: "web/verify",
-		title: "Browser assertions are refused unless typ, aud, lifetime, jti, Session owner and return_to all check out",
-		covers: ["web.verify-assertion", "web.assertion-types", "web.return-to", "web.response"],
+		title: "A join is refused without the page's cookie, with a used or foreign code, or with a proof that isn't over the code from an active Session's key",
+		covers: ["web.verify", "web.response"],
 		leg: 5,
 		async run(t: Harness) {
 			const { agent, token } = await t.session();
 			const endpoint = t.endpoint("browserSession");
-			const browser = await t.browser();
-			const returnTo = home(t);
-			const sid = token.session_id;
-			const tokenUrl = agent.company.metadata.token_endpoint;
-			const domain = agent.company.poppy.organization.domain;
-			const other = await t.agent();
-			for (const [label, assertion] of [
-				["a Session assertion (typ JWT)", agent.browserAssertion(sid, returnTo, { typ: "JWT" })],
-				["another audience", agent.browserAssertion(sid, returnTo, { audience: tokenUrl })],
-				["a lifetime over 60 seconds", agent.browserAssertion(sid, returnTo, { lifetime: 90 })],
-				["an expired assertion", agent.browserAssertion(sid, returnTo, { iatOffset: -300 })],
-				["return_to on another domain", agent.browserAssertion(sid, "https://attacker.example/")],
-				["return_to over http", agent.browserAssertion(sid, returnTo.replace("https:", "http:"))],
-				["return_to on a look-alike domain", agent.browserAssertion(sid, `https://${domain}.attacker.example/`)],
-				["a Session of another User", agent.browserAssertion(sid, returnTo, { subject: "usr_someone_else" })],
-				["a Session that doesn't exist", agent.browserAssertion("ses_does_not_exist", returnTo)],
-				["a Session of another agent", other.browserAssertion(sid, returnTo, { subject: agent.userId })],
+			const fresh = async () => {
+				const browser = await t.browser();
+				return { browser, form: await browser.openBrowserSession(endpoint) };
+			};
+			const post = (browser: Browser, code: string, proof: string) => browser.post(endpoint, new URLSearchParams({ code, proof }));
+			const sign = (code: string, options: Parameters<TestAgent["dpopProof"]>[2] = {}) => agent.dpopProof("POST", endpoint, { session: token.session, nonce: code, ...options });
+
+			// The attack of spec 9.6: a code and proof made in one browser, submitted from another that doesn't have the page's cookie.
+			const mine = await fresh();
+			const victim = await t.browser();
+			await refusedJoin(t, await post(victim, mine.form.code, await sign(mine.form.code)), "a code from another browser, without its cookie");
+			// That attempt used the code, whatever the result.
+			await refusedJoin(t, await post(mine.browser, mine.form.code, await sign(mine.form.code)), "a code already sent once");
+
+			const a = await fresh();
+			const b = await fresh();
+			await refusedJoin(t, await post(a.browser, b.form.code, await sign(b.form.code)), "another load's code, with this browser's cookie");
+
+			for (const [label, proof] of [
+				["a proof whose nonce isn't the code", (code: string) => sign(code, { nonce: "bc_something_else_entirely" })],
+				["a proof without a nonce", () => agent.dpopProof("POST", endpoint, { session: token.session })],
+				["a proof for another URL", (code: string) => sign(code, { htu: `${endpoint}-elsewhere` })],
+				["a proof made for GET", (code: string) => sign(code, { htm: "GET" })],
+				["a proof signed by a different key", (code: string) => sign(code, { wrongSigningKey: true })],
+				["a proof from a key that names no Session", async (code: string) => agent.dpopProof("POST", endpoint, { session: await agent.newSessionKey(), nonce: code })],
 			] as const) {
-				await refusedJoin(t, browser, endpoint, await assertion, label);
+				const { browser, form } = await fresh();
+				await refusedJoin(t, await post(browser, form.code, await proof(form.code)), label);
 			}
+			const { browser, form } = await fresh();
+			await refusedJoin(t, await post(browser, form.code, ""), "no proof");
 
-			const once = await agent.browserAssertion(sid, returnTo);
-			t.equal((await join(browser, endpoint, once)).status, 303, "a valid assertion");
-			await refusedJoin(t, await t.browser(), endpoint, once, "the same assertion again");
-
-			// And the other way round: a browser assertion can't start a Session.
-			const browserAssertion = await agent.browserAssertion(sid, returnTo, { audience: tokenUrl });
-			await t.refused("a browser assertion at the token endpoint", agent.startSession({ assertion: browserAssertion }), { status: 400, error: "invalid_grant" });
+			const ok = await fresh();
+			t.equal((await post(ok.browser, ok.form.code, await sign(ok.form.code))).status, 303, "a valid join");
 		},
 	}),
 
@@ -103,24 +135,22 @@ export const webChecks = [
 		leg: 5,
 		async run(t: Harness) {
 			const endSession = t.hook("endSession");
-			const session = await t.session();
-			const { agent, token } = session;
-			const endpoint = t.endpoint("browserSession");
+			const { agent, token } = await t.session();
 			// Alice is signed in to the site in this browser already.
 			const browser = await t.browser("alice");
 			t.equal(await accountPage(t, browser), 200, "the account page with only Alice's own site sign-in");
-			t.equal((await join(browser, endpoint, await agent.browserAssertion(token.session_id, home(t)))).status, 303, "joining the signed-out Session");
+			t.equal((await agent.joinBrowser(browser, token.session)).status, 303, "joining the signed-out Session");
 			t.ok((await accountPage(t, browser)) !== 200, "with the Session's cookie, the browser is the signed-out Session, whatever else it holds");
 
-			const signedIn = await t.signInDirect(agent, token.session_id, { scope: "poppy:read" });
+			const signedIn = await t.signInDirect(agent, token.session, { scope: t.profile("scopedTool").scope });
 			t.equal(await accountPage(t, browser), 200, "the same cookie after the Session signs in");
 			t.ok(signedIn.refresh_token, "sign-in returns the Account Token");
 			await agent.revoke(signedIn.refresh_token);
 			t.ok((await accountPage(t, browser)) !== 200, "the same cookie after the Session signs out");
 
-			const fresh = await signedInBrowser(t, session, endpoint);
+			const fresh = await signedInBrowser(t, agent);
 			t.equal(await accountPage(t, fresh.browser), 200, "a browser joined to a signed-in Session");
-			await endSession(fresh.sessionId);
+			await endSession(fresh.session.jkt);
 			t.ok((await accountPage(t, fresh.browser)) !== 200, "the cookie stops working when its Session ends");
 		},
 	}),

@@ -18,8 +18,8 @@ export const apiChecks = [
 
 	check({
 		id: "tokens/dpop-outside-mcp",
-		title: "APIs other than MCP refuse Bearer tokens, including the MCP server's own",
-		covers: ["tokens.bearer-only-mcp", "tokens.resource-bound"],
+		title: "APIs refuse a DPoP Session Token sent as Bearer, and a token issued for the MCP server",
+		covers: ["tokens.dpop-elsewhere", "tokens.resource-bound", "tokens.bearer-one-mcp"],
 		leg: 2,
 		async run(t: Harness) {
 			const session = await t.session();
@@ -32,7 +32,7 @@ export const apiChecks = [
 				body: JSON.stringify(tool.arguments),
 			});
 			await t.refusedResponse("a DPoP Session Token sent as Bearer", asBearer, { status: 401 });
-			await t.refusedResponse("the MCP Bearer token at the OpenAPI API, with a DPoP proof", await session.agent.dpopJson(url, mcp.token, tool.arguments), { status: 401 });
+			await t.refusedResponse("the MCP server's token at the OpenAPI API, with a DPoP proof", await session.agent.dpopJson(url, mcp.token, tool.arguments), { status: 401 });
 		},
 	}),
 

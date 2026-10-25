@@ -55,11 +55,11 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		actor: "agent",
 		request: `POST ${path(company.metadata.token_endpoint)}`,
 		status: 200,
-		lines: ["grant: jwt-bearer, signed by the agent's key", `token_type: ${session.token_type} · signed_in: ${session.signed_in}`, `session_id: ${short(session.session_id)}`],
+		lines: ["grant: jwt-bearer, signed by the agent's key", `token_type: ${session.token_type} · signed out`, `session key: ${short(session.session.jkt)}`],
 	});
 
 	const mcpUrl = agent.endpoint("mcp");
-	const mcp = await agent.startSession({ sessionId: session.session_id, resource: mcpUrl });
+	const mcp = await agent.startSession({ session: session.session, resource: mcpUrl });
 	const date = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
 	const found = await agent.mcp<{ structuredContent?: { offers?: Offer[] } }>(mcpUrl, mcp.access_token, "tools/call", { name: "search_flights", arguments: { from: "SFO", to: "LIS", date } });
 	const offers = found.structuredContent?.offers ?? [];
@@ -74,14 +74,14 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		lines: [`SFO → LIS · ${date} · ${offers.length} offers`, `${offer.airline} ${offer.flight_number} · departs ${offer.depart_local.slice(11, 16)}`, `$${offer.price.amount}`],
 	});
 
-	const device = await agent.deviceAuthorization("poppy:read poppy:write");
+	const device = await agent.deviceAuthorization("trips:read trips:write");
 	yield step({
 		id: "device",
 		title: "Ask Maya to sign in",
 		actor: "agent",
 		request: `POST ${path(company.metadata.device_authorization_endpoint ?? "")}`,
 		status: 200,
-		lines: [`user_code: ${device.user_code}`, `scope: poppy:read poppy:write`, `verify at ${path(device.verification_uri)}`],
+		lines: [`user_code: ${device.user_code}`, `scope: trips:read trips:write`, `verify at ${path(device.verification_uri)}`],
 	});
 
 	const browser = new Browser(browserFetch, siteCookie);
@@ -96,14 +96,14 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		lines: ["signed in to poppy.travel as maya@poppy.travel", `code ${device.user_code} matches`, `approves ${consent.scopes.join(", ")}`],
 	});
 
-	const signedIn = await agent.pollDevice(device.device_code, session.session_id);
+	const signedIn = await agent.pollDevice(device.device_code, session.session);
 	yield step({
 		id: "signed-in",
 		title: "The Session signs in",
 		actor: "agent",
 		request: `POST ${path(company.metadata.token_endpoint)} · device_code`,
 		status: 200,
-		lines: [`signed_in: ${signedIn.signed_in}`, `scope: ${signedIn.scope}`, "refresh_token: an Account Token for next time"],
+		lines: ["signed in", `scope: ${signedIn.scope ?? "trips:read trips:write"}`, "refresh_token: an Account Token for next time"],
 	});
 
 	const tool = async (name: string, args: unknown) => {

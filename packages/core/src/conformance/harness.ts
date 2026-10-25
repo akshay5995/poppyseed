@@ -13,6 +13,7 @@ import {
 	type HostedAgentOptions,
 	type Operation,
 	type Person,
+	type SessionKey,
 	type TargetProfile,
 	type TestAgent,
 	type TokenResponse,
@@ -68,7 +69,7 @@ export interface SignedIn extends Session {
 export interface SignInOptions {
 	/** Default alice. */
 	person?: Person;
-	/** Default every scope the company offers for Direct Sign-In. */
+	/** Default every scope the company offers. */
 	scope?: string;
 	/** The scopes to approve. Default all requested. */
 	approve?: string[];
@@ -154,18 +155,18 @@ export class Harness {
 		const signedOut = await agent.startSession();
 		if (options.signIn == null) return { agent, token: signedOut };
 		const scope = options.signIn === true ? undefined : options.signIn;
-		const token = await this.signInDirect(agent, signedOut.session_id, { ...options, scope });
+		const token = await this.signInDirect(agent, signedOut.session, { ...options, scope });
 		this.ok(token.refresh_token, "sign-in returns the Account Token in refresh_token");
 		const signedIn: SignedIn = { agent, signedOut, token: { ...token, refresh_token: token.refresh_token } };
 		return signedIn;
 	}
 
-	/** An MCP Bearer token for the Session, signed in when it is. Skips when the company has no MCP API. */
-	async mcpToken({ agent, token }: Session): Promise<{ url: string; token: string }> {
+	/** A token for the MCP server, for the same Session, signed in when it is. Skips when the company has no MCP API. */
+	async mcpToken({ agent, token }: Session): Promise<{ url: string; token: string; response: TokenResponse }> {
 		const url = this.endpoint("mcp");
-		const options = { sessionId: token.session_id, resource: url };
-		const bearer = token.refresh_token ? await agent.refresh(token.refresh_token, options) : await agent.startSession(options);
-		return { url, token: bearer.access_token };
+		const options = { session: token.session, resource: url };
+		const response = token.refresh_token ? await agent.refresh(token.refresh_token, options) : await agent.startSession(options);
+		return { url, token: response.access_token, response };
 	}
 
 	/** A browser signed in to the company's site as `person`, or an anonymous one. */
@@ -194,22 +195,32 @@ export class Harness {
 		return tool;
 	}
 
-	/** Scopes the company offers for a sign-in type, from poppy.json. Skips when the type isn't offered. */
+	/**
+	 * The scopes Direct or Device Sign-In can grant: every scope in
+	 * `scopes_supported` (spec 4.4). Skips when the issuer's grant types don't
+	 * offer the type.
+	 */
 	offered(type: "direct" | "device"): string[] {
-		const scopes = this.company.poppy.auth?.[type]?.scopes;
-		if (!scopes?.length) this.skip(`the company does not offer ${type === "direct" ? "Direct" : "Device"} Sign-In`);
+		const grant = type === "direct" ? "authorization_code" : "urn:ietf:params:oauth:grant-type:device_code";
+		const { grant_types_supported: grants = [], scopes_supported: scopes = [] } = this.company.metadata;
+		if (!grants.includes(grant) || scopes.length === 0) this.skip(`the company does not offer ${type === "direct" ? "Direct" : "Device"} Sign-In`);
 		return scopes;
 	}
 
-	/** Runs Direct Sign-In for an existing Session. Returns the token response. */
-	async signInDirect(agent: TestAgent, sessionId: string, options: SignInOptions = {}): Promise<TokenResponse> {
+	/** Runs Direct Sign-In for the Session `session` names. Returns the token response. */
+	async signInDirect(agent: TestAgent, session: SessionKey, options: SignInOptions = {}): Promise<TokenResponse> {
 		const scope = options.scope ?? this.offered("direct").join(" ");
 		const browser = await this.browser(options.person ?? "alice");
-		const request = await agent.authorizationRequest(scope);
+		const request = await agent.authorizationRequest(scope, session);
 		const back = await browser.decide(await browser.openConsent(request.url), "approve", options.approve);
 		const code = this.redirectParams(back, request.redirectUri).get("code");
 		this.ok(code, `approving returns a code to the redirect_uri, got ${back.headers.get("location")}`);
-		return agent.exchangeCode(request, code, sessionId);
+		return agent.exchangeCode(request, code);
+	}
+
+	/** The scopes a sign-in granted: `scope`, or exactly the ones requested when it leaves `scope` out (spec 4.4). */
+	granted(token: TokenResponse, requested: string): string {
+		return token.scope ?? requested;
 	}
 
 	/** The query of a redirect to `redirectUri`. Fails if the response isn't one. */

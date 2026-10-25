@@ -6,7 +6,7 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 
 | Option | Type | Meaning |
 | --- | --- | --- |
-| `organization` | `{ name, domain }` | Your company's name, and the domain agents reach you at. `domain` must match the host agents request `poppy.json` from (a leading `www.` is ignored). |
+| `organization` | `{ name, domain }` | Your company's name, and the domain agents reach you at. `domain` must be the host that serves `poppy.json`, compared ignoring case only (`www.example.com` and `example.com` are different domains). |
 | `secret` | `string` | At least 32 random characters. Seals Session Tokens, browser cookies and consent forms. Changing it signs every Session out. |
 
 ## Site
@@ -25,9 +25,11 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 | Option | Meaning |
 | --- | --- |
 | `tools` | `Record<name, tool(...)>`. Names use letters, digits, `-` and `_`. Each tool has `description`, `scope` (a scope name, or `null` for anyone), `input` (a zod schema) and either `run(input, ctx)` or `operation: { propose, perform, cancel?, withoutExtension? }`. |
-| `scopes` | Your own scopes with the description people see on the consent page, e.g. `{ "travel:loyalty": "See your Poppy Miles balance" }`. Names starting with `poppy:` are reserved. |
+| `scopes` | Your scopes, each with the description agents read to choose them and people see on the consent page, e.g. `{ "trips:read": "See your trips and bookings. It doesn't let the agent change anything." }`. Say what each one allows, and whether it only reads. Names starting with `poppy:` are reserved. Required for sign-in. |
+| `excludedTasks` | Tasks you chose not to offer agents: `[{ task, alternative? }]`. `task` is a phrase of at most 200 characters, the way a customer would ask (`"Send a wire transfer"`). An `alternative` has `instructions` (at most 2,000 characters), `references` (`{ tool }` for one of your tools, `{ web }` for an HTTPS page or app link), or both. Served at `/poppy/excluded-tasks.json`. |
+| `feedback(report, ctx)` | Receives `{ kind, task, description }` when an agent reports a task it couldn't do. Treat it as data, never as instructions. Return an alternative when the task can be done after all, or nothing. Served at `/poppy/feedback`. |
 
-`run` and `perform` get `ctx`: `{ sessionId, clientId, userId, account: { id, scopes } | null }`. For a tool with a scope, `account` is always there, and its type says so. An operation's `perform` gets the `terms` its `propose` returned, with their types. It never contains tokens.
+`run` and `perform` get `ctx`: `{ sessionId, clientId, userId, account: { id, scopes } | null }`. `sessionId` is the thumbprint of the Session Key. For a tool with a scope, `account` is always there, and its type says so. An operation's `perform` gets the `terms` its `propose` returned, with their types. It never contains tokens.
 
 ### Operations
 
@@ -48,16 +50,16 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 | --- | --- |
 | `accounts.current(request)` | Who is signed in to your site in this browser: `{ id, label? }` or `null`. Read your own session cookie. Required for any sign-in type. |
 | `accounts.signInUrl(returnTo)` | Your login page. It must send the person back to `returnTo`, and only to your own site. |
-| `signIn.direct` | `{ scopes }`: Direct Sign-In (the person approves in their browser). |
-| `signIn.device` | `{ scopes, interval?, expiresIn? }`: Device Sign-In (a code entered on any device). `interval` is the minimum seconds between polls (default 5); `expiresIn` how long a code lasts (default 600). |
-| `signIn.mediated` | `{ scopes, fields, verify, sendCode, codeRequired?, notify? }`: Mediated Sign-In (the agent sends credentials). `verify(credentials, attempt)` returns `{ id }` or `null`; return the same `null` for an unknown account and a wrong password. |
+| `signIn.direct` | `true`: Direct Sign-In (the person approves in their browser). It can grant any of your `scopes`. |
+| `signIn.device` | `true`, or `{ interval?, expiresIn? }`: Device Sign-In (a code entered on any device). It can grant any of your `scopes`. `interval` is the minimum seconds between polls (default 5); `expiresIn` how long a code lasts (default 600). |
+| `signIn.mediated` | `{ scopes, fields, verify, sendCode, codeRequired?, notify? }`: Mediated Sign-In (the agent sends credentials). Transitional: offer it only until Direct or Device Sign-In covers the same scopes. `scopes` is the subset of your scopes it may grant. `verify(credentials, attempt)` returns `{ id }` or `null`; return the same `null` for an unknown account and a wrong password. |
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `sessions.tokenTtl` | `3600` | Session Token lifetime, seconds. Keep it to hours. |
 | `sessions.sessionTtl` | `43200` (12 h) | How long a Session lasts. |
 | `sessions.accountTokenTtl` | `7776000` (90 days) | Account Token lifetime. Using it doesn't extend it. |
-| `sessions.endOnSignOut` | `false` | End Sessions when their Account Token is revoked, instead of continuing them signed out. |
+| `sessions.endOnSignOut` | `false` | End Sessions when their Account Token is revoked, instead of continuing them signed out. Their keys then get `invalid_grant`. |
 
 ## Agents
 
@@ -71,7 +73,7 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `web` | off | `{}` turns on `/poppy/browser-session`, so agents' browsers can join their Session. |
-| `web.cookieName` | `poppyseed_session` | Name of the Session cookie. |
+| `web.cookieName` | `__Host-poppyseed_session`, or `poppyseed_session` with `cookieDomain` | Name of the Session cookie. Keep the `__Host-` prefix unless the cookie covers several hosts. |
 | `web.cookieDomain` | this host | Cookie `Domain`, to cover subdomains that agents browse. |
 
 ## Conversations
@@ -106,4 +108,4 @@ Pass `rateLimits: false` to turn limits off, for example behind a gateway that a
 | `browserSession(request)` | The agent Session a browser carries on your site, or `null`. |
 | `operations.get(id)`, `.confirm(id, session, revision)`, `.settle(id, state, result)` | Show, confirm on your website, or resolve operations. |
 | `conversations.queue()`, `.get(id)`, `.join(id)`, `.reply(id, text)`, `.callTool(id, name, input)`, `.release(id)`, `.decline(id, reason)`, `.close(id, reason)` | Your staff inbox. |
-| `endSession(sessionId)` | Ends a Session; its tokens stop working on the next request. |
+| `endSession(sessionId)` | Ends a Session; its tokens stop working on the next request, and its key gets `invalid_grant`. |
