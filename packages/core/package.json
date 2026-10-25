@@ -31,7 +31,7 @@
     "mutants": "node --experimental-strip-types --no-warnings scripts/mutants.ts"
   },
   "dependencies": {
-    "jose": "^6.0.0"
+    "jose": "^6.2.13"
   },
   "peerDependencies": {
     "next": ">=15",
@@ -43,8 +43,8 @@
     }
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8",
-    "next": "^16.4.0"
+    "@electric-sql/pglite": "^0.5.11",
+    "next": "^16.4.2"
   },
   "files": [
     "dist",
