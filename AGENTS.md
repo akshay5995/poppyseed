@@ -36,6 +36,7 @@ Node 22, pnpm 10. `pnpm install` once, then:
 
 - `spec-update` (`.claude/skills/`): bring the code in line with a change to the official spec.
 - `verify` (`.claude/skills/`): build, start and drive the fixture app to prove `poppyseed/next` end to end, with evidence in `.verify/next/`.
+- `security-check` (`.claude/skills/`): hold a change to the security invariants (tokens, DPoP, ownership, HTML, fetching, supply chain). Run it before every push that changes server code, workflows or dependencies.
 
 ## Gates
 
@@ -47,6 +48,8 @@ Node 22, pnpm 10. `pnpm install` once, then:
 - a shipped check has no mutant in `mutants.data.ts` and no `NOT_MUTATED` reason.
 
 Judge a command by its exit code, never by grepping its output. `pnpm -s` hides the lines a grep would look for.
+
+Run the `security-check` skill on every change before you push, and turn each real gap it finds into a check and a mutant, like any other rule.
 
 Never skip, weaken or delete a check to get green. A failing check means the code or the spec is wrong, so fix whichever one is wrong.
 
