@@ -15,7 +15,7 @@
     "poppyseed-video": "workspace:*",
     "@remotion/player": "4.0.534",
     "marked": "^18.1.0",
-    "next": "^16.4.0",
+    "next": "^16.4.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "shiki": "^4.5.0",
