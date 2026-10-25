@@ -17,8 +17,9 @@ import { canSafeFetch, safeFetch } from "./safe-fetch.ts";
 import { memoryStore } from "./store.ts";
 import { Sealer } from "./tokens.ts";
 import { Tools } from "./tools.ts";
-import { BASE_SCOPES, type OperationTool, type PoppyseedConfig, type ResolvedConfig, type RunTool, type SessionContext, type Terms, type ToolDefinition } from "./types.ts";
-import { browserSessionEndpoint, readBrowserSession } from "./web.ts";
+import { checkExcludedTasks, excludedTasksDocument, feedbackEndpoint } from "./tasks.ts";
+import { type OperationTool, type PoppyseedConfig, type ResolvedConfig, type RunTool, type SessionContext, type Terms, type ToolDefinition } from "./types.ts";
+import { browserSessionEndpoint, browserSessionPage, readBrowserSession } from "./web.ts";
 import { json } from "./util.ts";
 
 /** Your staff's inbox for conversations handed off by Personal Agents (spec 7.9). */
@@ -79,10 +80,9 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 	const operations = new Operations(config.store, byName);
 	const tools = new Tools(byName, operations, clients);
 	const conversations = config.conversations && new Conversations(config, config.conversations, tools);
-	/** Signs out everywhere an Account Token reached: its Sessions, and the conversations that used the account. */
+	/** Signs out every Session an Account Token reached. Conversations and operations that used the account stay, for a sign-in (spec 4.9). */
 	const signOut = async (hash: string) => {
-		const record = await revokeAccountToken(config.store, hash, { endSessions: config.sessions?.endOnSignOut === true });
-		if (record) await conversations?.closeForAccount(record.clientId, record.userId, record.accountId);
+		await revokeAccountToken(config.store, hash, { endSessions: config.sessions?.endOnSignOut === true });
 	};
 	const dpop = (request: Request, publicUrl: string) => guard(request, publicUrl, config, sealer, "dpop");
 	const confirmWaitMs = config.operations?.confirmWait ?? 3000;
@@ -90,7 +90,7 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 	/** One handler per method for every path in ROUTES; a path absent here is a bug the table check below catches. */
 	const table: Record<string, Partial<Record<"GET" | "POST", Handler>>> = {
 		[PATHS.poppyJson]: { GET: async () => json(poppyDocument(config, tools), 200, cacheable) },
-		[PATHS.authorizationServer]: { GET: async () => json(authorizationServerMetadata(config), 200, cacheable) },
+		[PATHS.authorizationServer]: { GET: async () => json(authorizationServerMetadata(config, tools), 200, cacheable) },
 		[PATHS.mcpResourceMetadata]: { GET: async () => json(mcpResourceMetadata(config), 200, cacheable) },
 		[PATHS.token]: { POST: (request) => tokenEndpoint(request, config, clients, sealer) },
 		[PATHS.revoke]: { POST: (request) => revokeEndpoint(request, config, clients, signOut) },
@@ -99,8 +99,18 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 		[PATHS.deviceVerification]: { GET: (request) => deviceVerificationEndpoint(request, config, clients, sealer), POST: (request) => deviceVerificationEndpoint(request, config, clients, sealer) },
 		[PATHS.mediated]: { POST: async (request, { publicUrl }) => mediatedEndpoint(request, config, clients, sealer, await dpop(request, publicUrl), undefined) },
 		[`${PATHS.mediated}/:id`]: { POST: async (request, { publicUrl, params }) => mediatedEndpoint(request, config, clients, sealer, await dpop(request, publicUrl), params.id) },
-		[PATHS.browserSession]: { POST: async (request) => (config.web ? browserSessionEndpoint(request, config, clients, sealer) : Promise.reject(notFound())) },
+		[PATHS.browserSession]: {
+			GET: async () => (config.web ? browserSessionPage(config, sealer) : Promise.reject(notFound())),
+			POST: async (request) => (config.web ? browserSessionEndpoint(request, config, sealer) : Promise.reject(notFound())),
+		},
 		[PATHS.mcp]: { POST: async (request, { publicUrl }) => mcpEndpoint(request, tools, config.organization.name, await guard(request, publicUrl, config, sealer, "mcp")) },
+		[PATHS.feedback]: {
+			POST: async (request, { publicUrl }) => {
+				if (!config.feedback) throw notFound();
+				return feedbackEndpoint(request, config, config.feedback, await dpop(request, publicUrl));
+			},
+		},
+		[PATHS.excludedTasks]: { GET: async () => (config.excludedTasks ? excludedTasksDocument(config) : Promise.reject(notFound())) },
 		[PATHS.openapi]: { GET: async () => json(openApiDocument(config, tools), 200, cacheable) },
 		[`${PATHS.tools}/:name`]: { POST: async (request, { publicUrl, params }) => toolCallEndpoint(request, config.store, tools, await dpop(request, publicUrl), params.name!) },
 		[`${PATHS.operations}/:id`]: { GET: async (request, { publicUrl, params }) => operationsEndpoint(request, operations, await dpop(request, publicUrl), params.id!, "read", confirmWaitMs) },
@@ -220,16 +230,17 @@ function resolveConfig(input: PoppyseedConfig): ResolvedConfig {
 	for (const name of Object.keys(scopes)) {
 		if (name.startsWith("poppy:")) throw new Error(`poppyseed: scope ${name} must not start with poppy:, which the protocol reserves`);
 	}
-	const known = new Set<string>([...BASE_SCOPES, ...Object.keys(scopes)]);
+	const known = new Set<string>(Object.keys(scopes));
 	for (const [name, tool] of Object.entries(input.tools ?? {})) {
 		if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error(`poppyseed: tool name ${name} may use only letters, digits, - and _`);
 		if (Boolean(tool.run) === Boolean(tool.operation)) throw new Error(`poppyseed: tool ${name} needs exactly one of run or operation`);
 		if (tool.scope !== null && !known.has(tool.scope)) throw new Error(`poppyseed: tool ${name} needs unknown scope ${tool.scope}; add it to scopes`);
 	}
-	for (const type of ["direct", "device", "mediated"] as const) {
-		const unknown = (input.signIn?.[type]?.scopes ?? []).filter((s) => !known.has(s));
-		if (unknown.length > 0) throw new Error(`poppyseed: signIn.${type} offers unknown scopes ${unknown.join(", ")}`);
-	}
+	// Direct and Device Sign-In grant any of `scopes`; Mediated Sign-In only its own (spec 4.4).
+	if (input.signIn && known.size === 0) throw new Error("poppyseed: signIn needs scopes, each with a description, for Personal Agents to request");
+	const unknown = (input.signIn?.mediated?.scopes ?? []).filter((s) => !known.has(s));
+	if (unknown.length > 0) throw new Error(`poppyseed: signIn.mediated offers unknown scopes ${unknown.join(", ")}`);
+	if (input.excludedTasks) checkExcludedTasks(input.excludedTasks, Object.keys(input.tools ?? {}));
 	// The types already require this; JavaScript callers get the same message.
 	if (input.signIn && !input.accounts) throw new Error("poppyseed: signIn needs accounts, so the sign-in pages know who is signed in to your site");
 	if (!input.store && globalThis.process?.env?.NODE_ENV === "production") {

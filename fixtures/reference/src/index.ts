@@ -71,7 +71,7 @@ const scripted: CompanyAgent = {
 
 export interface Reference {
 	company: Poppyseed;
-	/** The company's own website: /account answers 200 only for a signed-in visitor with poppy:read. */
+	/** The company's own website: /account answers 200 only for a signed-in visitor with notes:read, and otherwise names that scope. */
 	site(request: Request): Promise<Response>;
 	/** The conformance Target, less the agent host: the company in-process, every hook, and its profile. */
 	target: { baseUrl: string; fetch: Fetch; hooks: Required<Hooks>; profile: TargetProfile };
@@ -91,14 +91,17 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 		fetch: options.fetch,
 		dev: { allowInsecureClients: options.allowInsecureClients ?? false },
 		waitUntil: options.waitUntil,
-		scopes: { "reference:extra": "An example custom scope" },
+		scopes: {
+			"notes:read": "See the notes saved on your account. It doesn't let the agent change anything.",
+			"notes:write": "Save notes, and exchange, ship or close things on your account. It doesn't let the agent read your notes.",
+		},
 		accounts: { current: currentPerson, signInUrl: (returnTo) => `/sign-in?return_to=${encodeURIComponent(returnTo)}` },
 		signIn: {
-			direct: { scopes: ["poppy:read", "poppy:write", "reference:extra"] },
+			direct: true,
 			// Short enough for a check to wait out.
-			device: { scopes: ["poppy:read", "poppy:write"], interval: 1, expiresIn: 10 },
+			device: { interval: 1, expiresIn: 10 },
 			mediated: {
-				scopes: ["poppy:read"],
+				scopes: ["notes:read"],
 				fields: [
 					{ name: "email", label: "Email", secret: false },
 					{ name: "password", label: "Password", secret: true },
@@ -119,11 +122,11 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 		clients: { allow: (clientId) => new URL(clientId).pathname !== UNREGISTERED_PATH },
 		tools: {
 			echo: tool({ description: "Echo text", scope: null, input: z.object({ text: z.string() }), run: ({ text }) => ({ text }) }),
-			private_echo: tool({ description: "Echo for signed-in users", scope: "poppy:read", input: z.object({}), run: () => ({}) }),
-			write_note: tool({ description: "Write a note", scope: "poppy:write", input: z.object({ text: z.string() }), run: () => ({ saved: true }) }),
+			private_echo: tool({ description: "Echo for signed-in users", scope: "notes:read", input: z.object({}), run: () => ({}) }),
+			write_note: tool({ description: "Write a note", scope: "notes:write", input: z.object({ text: z.string() }), run: () => ({ saved: true }) }),
 			exchange_item: tool({
 				description: "Exchange an item for another size",
-				scope: "poppy:write",
+				scope: "notes:write",
 				input: z.object({ item: z.string(), size: z.string() }),
 				operation: {
 					propose: ({ item, size }) => ({ key: item, summary: `Exchange ${item} for size ${size}, at no cost.`, terms: { item, size } }),
@@ -135,7 +138,7 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 			}),
 			close_account: tool({
 				description: "Close the account",
-				scope: "poppy:write",
+				scope: "notes:write",
 				input: z.object({}),
 				operation: {
 					propose: () => ({ key: "close", summary: "Close your account and delete its data.", terms: {}, userApprovalRequired: true }),
@@ -155,7 +158,7 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 			}),
 			ship_slowly: tool({
 				description: "Ship a parcel (takes a moment)",
-				scope: "poppy:write",
+				scope: "notes:write",
 				input: z.object({ parcel: z.string() }),
 				operation: {
 					propose: ({ parcel }) => ({ summary: `Ship parcel ${parcel} by ground.`, terms: { parcel } }),
@@ -167,6 +170,15 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 			}),
 		},
 		operations: { confirmWait: 200 },
+		excludedTasks: [
+			{
+				task: "Delete all my notes at once",
+				alternative: { instructions: "Notes can only be deleted all at once on the account page, after you confirm your password.", references: [{ web: `https://${domain}/account` }] },
+			},
+			{ task: "Transfer my account to someone else" },
+		],
+		// A report of a task the company does offer gets an alternative; the rest are noted.
+		feedback: ({ task }) => (/note/i.test(task) ? { instructions: "Notes are saved with the write_note tool.", references: [{ tool: "write_note" }] } : undefined),
 		conversations: { agent: scripted, handoff: { available: () => true }, retainEvents: 30, maxWait: 5 },
 	});
 
@@ -185,8 +197,9 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 		if (new URL(request.url).pathname !== "/account") return new Response("not found", { status: 404 });
 		// The Session's cookie wins over the site's own sign-in while the browser carries it (spec 5).
 		const session = await company.browserSession(request);
-		const signedIn = session ? Boolean(session.account?.scopes.includes("poppy:read")) : currentPerson(request) !== null;
-		return new Response(signedIn ? "Your account" : "Please sign in", { status: signedIn ? 200 : 401 });
+		const signedIn = session ? Boolean(session.account?.scopes.includes("notes:read")) : currentPerson(request) !== null;
+		// A refusal for a missing scope names it, so the Personal Agent can request it (spec 5).
+		return new Response(signedIn ? "Your account" : "This page needs the notes:read scope. Please sign in.", { status: signedIn ? 200 : 401 });
 	};
 
 	const hooks = {
@@ -203,13 +216,13 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 
 	const profile = {
 		publicTool: { name: "echo", arguments: { text: "hi" } },
-		scopedTool: { name: "private_echo", arguments: {}, scope: "poppy:read" },
-		writeTool: { name: "write_note", arguments: { text: "hi" } },
+		scopedTool: { name: "private_echo", arguments: {}, scope: "notes:read" },
+		writeTool: { name: "write_note", arguments: { text: "hi" }, scope: "notes:write" },
 		unregisteredClientPath: UNREGISTERED_PATH,
 		operations: {
-			action: { name: "exchange_item", arguments: { item: "itm_1", size: "M" }, revisedArguments: { item: "itm_1", size: "L" }, scope: "poppy:write" },
-			approvalAction: { name: "close_account", arguments: {}, scope: "poppy:write" },
-			slowAction: { name: "ship_slowly", arguments: { parcel: "p1" }, scope: "poppy:write" },
+			action: { name: "exchange_item", arguments: { item: "itm_1", size: "M" }, revisedArguments: { item: "itm_1", size: "L" }, scope: "notes:write" },
+			approvalAction: { name: "close_account", arguments: {}, scope: "notes:write" },
+			slowAction: { name: "ship_slowly", arguments: { parcel: "p1" }, scope: "notes:write" },
 			unknownOutcomeAction: { name: "charge_card", arguments: { amount: 40 }, scope: null },
 		},
 		web: { accountPage: "/account", confirmOperation: "/operations/{id}/confirm" },

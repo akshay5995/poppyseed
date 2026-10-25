@@ -6,7 +6,7 @@ import type { Harness } from "../harness.ts";
 async function mediated(t: Harness) {
 	const session = await t.session();
 	t.endpoint("mediated");
-	const scope = session.agent.company.poppy.auth?.mediated?.scopes[0] ?? "poppy:read";
+	const scope = session.agent.company.poppy.auth?.mediated?.scopes[0] ?? t.skip("auth.mediated lists no scopes");
 	return { ...session, ...t.profile("mediated"), scope };
 }
 
@@ -21,19 +21,20 @@ function noCredentials(t: Harness, body: unknown, credentials: Record<string, st
 export const mediatedChecks = [
 	check({
 		id: "mediated/sign-in",
-		title: "Mediated Sign-In with correct credentials completes with an Account Token, and never returns the credentials",
-		covers: ["mediated.flow", "mediated.no-credentials-returned", "signin.response"],
+		title: "Mediated Sign-In with correct credentials completes with an Account Token and a signed-in token for the Session, and never returns the credentials",
+		covers: ["mediated.flow", "mediated.no-credentials-returned", "signin.response", "signin.grantable"],
 		leg: 5,
 		async run(t: Harness) {
 			const { agent, token, credentials, scope } = await mediated(t);
 			const { httpStatus, body } = await agent.mediatedSignIn(token.access_token, { scope, credentials });
 			t.equal(httpStatus, 200, "status code");
-			t.ok(status(body) === "complete" && "signed_in" in body, `status complete, got ${JSON.stringify(body).slice(0, 120)}`);
-			t.equal(body.signed_in, true, "signed_in");
-			t.equal(body.session_id, token.session_id, "the current Session signs in");
-			t.equal(body.scope, scope, "scope");
+			t.ok(status(body) === "complete" && "access_token" in body, `status complete, got ${JSON.stringify(body).slice(0, 120)}`);
+			t.equal(body.scope ?? scope, scope, "scope");
 			t.equal(body.token_type, "DPoP", "token_type");
 			t.ok(body.refresh_token, "the Account Token arrives in refresh_token");
+			// The token is for the current Session: bound to its key.
+			const scoped = t.target.profile?.scopedTool;
+			if (scoped?.scope === scope) await t.toolOk(agent, body.access_token, scoped, "the signed-in token");
 			noCredentials(t, body, credentials, "the response");
 		},
 	}),
@@ -41,7 +42,7 @@ export const mediatedChecks = [
 	check({
 		id: "mediated/failures",
 		title: "A wrong password and an unknown account fail the same way, without the credentials",
-		covers: ["mediated.no-credentials-returned", "guide.company-mediated", "mediated.flow"],
+		covers: ["mediated.no-credentials-returned", "guide.company-mediated", "mediated.flow", "mediated.errors"],
 		leg: 5,
 		async run(t: Harness) {
 			const { agent, token, credentials, wrongPassword, unknownAccount, scope } = await mediated(t);
@@ -51,16 +52,18 @@ export const mediatedChecks = [
 			t.equal(`${unknown.httpStatus} ${JSON.stringify(unknown.body)}`, `${wrong.httpStatus} ${JSON.stringify(wrong.body)}`, "an unknown account fails exactly like a wrong password");
 			noCredentials(t, wrong.body, wrongPassword, "the failure");
 			noCredentials(t, unknown.body, unknownAccount, "the failure");
-			const bad = await agent.mediatedSignIn(token.access_token, { scope: "poppy:not-a-scope", credentials });
-			t.ok("error" in bad.body && bad.body.error === "invalid_scope", `an unknown scope is invalid_scope, got ${JSON.stringify(bad.body)}`);
+			const bad = await agent.mediatedSignIn(token.access_token, { scope: "not-a-scope", credentials });
+			t.ok(bad.httpStatus === 400 && "error" in bad.body && bad.body.error === "invalid_scope", `an unknown scope is invalid_scope (400), got ${bad.httpStatus} ${JSON.stringify(bad.body)}`);
 			noCredentials(t, bad.body, credentials, "the error");
+			const unknownId = await agent.mediatedSignIn(token.access_token, { code: "123456" }, "sgn_does_not_exist");
+			t.ok(unknownId.httpStatus === 404 && "error" in unknownId.body && unknownId.body.error === "sign_in_not_found", `an unknown sign_in_id is sign_in_not_found (404), got ${unknownId.httpStatus} ${JSON.stringify(unknownId.body)}`);
 		},
 	}),
 
 	check({
 		id: "mediated/code",
 		title: "An unusual sign-in needs a one-time code: wrong codes ask again until the limit, only its Session can finish it",
-		covers: ["mediated.otp-unusual", "mediated.flow"],
+		covers: ["mediated.otp-unusual", "mediated.flow", "mediated.errors"],
 		leg: 5,
 		async run(t: Harness) {
 			const lastCode = t.hook("lastCode");
@@ -77,7 +80,7 @@ export const mediatedChecks = [
 			const code = await lastCode();
 			const stranger = await agent.startSession();
 			const hijack = await agent.mediatedSignIn(stranger.access_token, { code }, first.sign_in_id);
-			t.ok(status(hijack.body) !== "complete", "another Session can't finish the sign-in");
+			t.ok(hijack.httpStatus === 404 && "error" in hijack.body && hijack.body.error === "sign_in_not_found", `another Session can't finish the sign-in: sign_in_not_found, got ${hijack.httpStatus} ${JSON.stringify(hijack.body)}`);
 			const done = await agent.mediatedSignIn(token.access_token, { code }, first.sign_in_id);
 			t.equal(status(done.body), "complete", "the right code completes it");
 			noCredentials(t, done.body, codeCredentials, "the response");
@@ -90,6 +93,8 @@ export const mediatedChecks = [
 				last = status((await agent.mediatedSignIn(second.access_token, { code: "000000x" }, again.sign_in_id)).body);
 			}
 			t.equal(last, "failed", "wrong codes end in failed within 20 tries");
+			const late = await agent.mediatedSignIn(second.access_token, { code: await lastCode() }, again.sign_in_id);
+			t.equal(`${late.httpStatus} ${status(late.body)}`, "200 failed", "a code for a failed sign-in, even the right one, gets failed again");
 		},
 	}),
 

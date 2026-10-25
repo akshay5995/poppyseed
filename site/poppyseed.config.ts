@@ -54,7 +54,12 @@ export const poppyseed = definePoppyseed({
 		}
 	},
 	apiDescription: "Search flights and hotels, read fare rules, see your trips and book with your approval",
-	scopes: { "travel:loyalty": "See your Poppy Miles balance" },
+	// What Personal Agents can ask for, in words a traveler and a model both understand.
+	scopes: {
+		"trips:read": "See your trips, bookings and fare rules. It doesn't let the agent book or change anything.",
+		"trips:write": "Book, change and cancel trips for you, each one only after you approve it. It doesn't let the agent see your other trips.",
+		"travel:loyalty": "See your Poppy Miles balance",
+	},
 
 	// Who is signed in to poppy.travel itself, so consent pages know whose account they connect.
 	accounts: {
@@ -65,10 +70,11 @@ export const poppyseed = definePoppyseed({
 		signInUrl: (returnTo) => `/travel/login?return_to=${encodeURIComponent(returnTo)}`,
 	},
 	signIn: {
-		direct: { scopes: ["poppy:read", "poppy:write", "travel:loyalty"] },
-		device: { scopes: ["poppy:read", "poppy:write", "travel:loyalty"] },
+		direct: true,
+		device: true,
+		// Transitional (spec 4.7): read-only, until every agent can use direct or device sign-in.
 		mediated: {
-			scopes: ["poppy:read"],
+			scopes: ["trips:read"],
 			fields: [
 				{ name: "email", label: "Email", secret: false },
 				{ name: "password", label: "Password", secret: true },
@@ -88,7 +94,7 @@ export const poppyseed = definePoppyseed({
 		},
 	},
 	// Personal Agents' browsers can join their Session here; /trips then shows what the Session may see.
-	web: { cookieName: "pt_agent_session" },
+	web: { cookieName: "__Host-pt_agent_session" },
 
 	conversations: {
 		agent: process.env.ANTHROPIC_API_KEY
@@ -131,7 +137,7 @@ export const poppyseed = definePoppyseed({
 		}),
 		my_trips: tool({
 			description: "Your upcoming trips and bookings.",
-			scope: "poppy:read",
+			scope: "trips:read",
 			input: z.object({}),
 			run: (_input, ctx) => ({
 				trips: bookingsOf(ctx.account.id).map((b) => ({
@@ -152,7 +158,7 @@ export const poppyseed = definePoppyseed({
 		}),
 		book_flight: tool({
 			description: "Book a flight offer for a traveler. Charges the card on file once the booking is confirmed.",
-			scope: "poppy:write",
+			scope: "trips:write",
 			input: z.object({ offer_id: z.string(), traveler_name: z.string().min(2) }),
 			operation: {
 				propose: ({ offer_id, traveler_name }, ctx) => {
@@ -181,7 +187,7 @@ export const poppyseed = definePoppyseed({
 		}),
 		cancel_booking: tool({
 			description: "Cancel a booking by its reference. Refunds follow the fare rules.",
-			scope: "poppy:write",
+			scope: "trips:write",
 			input: z.object({ reference: z.string() }),
 			operation: {
 				propose: ({ reference }, ctx) => {

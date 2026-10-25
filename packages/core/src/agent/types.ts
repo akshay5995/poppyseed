@@ -49,9 +49,9 @@ export interface ActionTool extends Tool {
 export interface ConversationProfile {
 	/** Any message the Company Agent answers. */
 	hello: string;
-	/** Makes the Company Agent read the User's account (needs poppy:read). */
+	/** Makes the Company Agent read the User's account (needs scopedTool's scope). */
 	accountRequest?: string;
-	/** Makes the Company Agent change something in the account (needs poppy:write). */
+	/** Makes the Company Agent change something in the account (needs writeTool's scope). */
 	changeRequest?: string;
 	/** Makes the Company Agent propose an operation. */
 	operationRequest?: string;
@@ -67,8 +67,8 @@ export interface TargetProfile {
 	publicTool?: Tool;
 	/** A tool that needs a scope, with valid arguments. */
 	scopedTool?: Tool & { scope: string };
-	/** A tool that needs poppy:write and not poppy:read, with valid arguments. */
-	writeTool?: Tool;
+	/** A tool that needs another scope than scopedTool, with valid arguments, so checks can grant one and not the other. */
+	writeTool?: Tool & { scope: string };
 	/** Path, under the agent host's origin, of a client_id the company has not registered. Set it when the company requires registration. */
 	unregisteredClientPath?: string;
 	/** Operation tools (operations extension). */
@@ -88,7 +88,7 @@ export interface TargetProfile {
 	conversations?: ConversationProfile;
 	/** Web browsing (spec 5). */
 	web?: {
-		/** A page that answers 200 only when the request's Session (or site sign-in) has the User's account with poppy:read. */
+		/** A page that answers 200 only when the request's Session (or site sign-in) has the User's account with scopedTool's scope, and otherwise names the scope it needs. */
 		accountPage: string;
 		/** A page that confirms an operation for the browser's Session when POSTed `revision` as a form; `{id}` stands for the operation ID. */
 		confirmOperation?: string;

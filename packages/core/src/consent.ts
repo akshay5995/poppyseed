@@ -2,7 +2,7 @@ import type { ClientMetadata, ClientRegistry } from "./clients.ts";
 import { PoppyError } from "./errors.ts";
 import { esc, found, page, readCookie } from "./html.ts";
 import { readForm, requestedScopes, type AuthCodeRecord, type DeviceRecord } from "./oauth.ts";
-import { key, secretHash } from "./records.ts";
+import { key, secretHash, type Connection } from "./records.ts";
 import type { Sealer } from "./tokens.ts";
 import type { PoppyseedConfig, ResolvedConfig, SiteAccount } from "./types.ts";
 import { nowSec, randomId } from "./util.ts";
@@ -15,17 +15,13 @@ import { nowSec, randomId } from "./util.ts";
 
 type Accounts = NonNullable<PoppyseedConfig["accounts"]>;
 
-const BASE_SCOPE_TEXT: Record<string, string> = {
-	"poppy:read": "View your account information, such as orders and bookings",
-	"poppy:write": "Make changes for you, such as booking or changing a reservation",
-};
 const CSRF_COOKIE = "poppyseed_csrf";
 const MAX_WRONG_CODES = 10;
 const csrfFrom = (request: Request) => readCookie(request, CSRF_COOKIE);
 
 /** What the consent form carries, sealed: who it was shown to, and what they are deciding on. */
 export type ConsentState = { accountId: string; csrf: string; scopes: string[]; exp: number } & (
-	| { kind: "authorize"; authorize: { clientId: string; redirectUri: string; state?: string; codeChallenge: string } }
+	| { kind: "authorize"; authorize: { clientId: string; redirectUri: string; state?: string; codeChallenge: string; jkt: string } }
 	| { kind: "device"; device: { hash: string } }
 );
 
@@ -51,9 +47,12 @@ export async function authorizeEndpoint(request: Request, config: ResolvedConfig
 	if (params.get("response_type") !== "code") return back("unsupported_response_type");
 	const codeChallenge = params.get("code_challenge");
 	if (!codeChallenge || params.get("code_challenge_method") !== "S256") return back("invalid_request");
+	// The code is bound to the Session Key (spec 4.5); there are no pushed requests, so dpop_jkt is required.
+	const jkt = params.get("dpop_jkt");
+	if (!jkt || !/^[A-Za-z0-9_-]{43}$/.test(jkt)) return back("invalid_request");
 	let scopes: string[];
 	try {
-		scopes = requestedScopes(params.get("scope"), signIn.direct.scopes);
+		scopes = requestedScopes(params.get("scope"), Object.keys(config.scopes));
 	} catch {
 		return back("invalid_scope");
 	}
@@ -62,7 +61,7 @@ export async function authorizeEndpoint(request: Request, config: ResolvedConfig
 	const switchAccount = accounts.signInUrl(`${config.baseUrl}${url.pathname}${url.search}`);
 	if (!account) return found(switchAccount);
 	const csrf = csrfFrom(request) ?? randomId("csrf");
-	const sealed = await sealer.seal("consent", { kind: "authorize", accountId: account.id, csrf, scopes, exp: nowSec() + 600, authorize: { clientId, redirectUri, state, codeChallenge } });
+	const sealed = await sealer.seal("consent", { kind: "authorize", accountId: account.id, csrf, scopes, exp: nowSec() + 600, authorize: { clientId, redirectUri, state, codeChallenge, jkt } });
 	return consentPage(config, client.meta, account, scopes, sealed, csrf, switchAccount);
 }
 
@@ -118,7 +117,7 @@ async function decide(request: Request, config: ResolvedConfig, accounts: Accoun
 		const a = state.authorize;
 		if (!approved || granted.length === 0) return redirectTo(a.redirectUri, { error: "access_denied", state: a.state, iss: config.urls.issuer });
 		const code = randomId("code", 32);
-		const record: AuthCodeRecord = { clientId: a.clientId, redirectUri: a.redirectUri, codeChallenge: a.codeChallenge, accountId: account.id, scopes: granted };
+		const record: AuthCodeRecord = { clientId: a.clientId, jkt: a.jkt, redirectUri: a.redirectUri, codeChallenge: a.codeChallenge, accountId: account.id, scopes: granted };
 		await config.store.set(key.authCode(await secretHash(code)), record, { expiresAt: Date.now() + 60_000 });
 		return redirectTo(a.redirectUri, { code, state: a.state, iss: config.urls.issuer });
 	}
@@ -144,7 +143,7 @@ function redirectTo(uri: string, params: Record<string, string | undefined>): Re
 	return found(url.toString());
 }
 
-function consentPage(
+async function consentPage(
 	config: ResolvedConfig,
 	client: Pick<ClientMetadata, "client_id" | "client_name" | "logo_uri">,
 	account: SiteAccount,
@@ -153,8 +152,11 @@ function consentPage(
 	csrf: string,
 	switchAccountUrl: string,
 	userCode?: string,
-): Response {
+): Promise<Response> {
 	const agentName = client.client_name ?? "A personal agent";
+	// Scopes this agent already has on the account are marked, so the person reviews only what's new (guide: Consent pages).
+	const connections = (await config.store.get<Connection[]>(key.connections(account.id))) ?? [];
+	const granted = new Set(connections.find((c) => c.clientId === client.client_id && c.expiresAt > Date.now())?.scopes ?? []);
 	// Only HTTPS logos, except for loopback agents in development.
 	const logoOk = client.logo_uri?.startsWith("https://") || (config.dev?.allowInsecureClients && client.logo_uri?.startsWith("http://"));
 	const logo = logoOk ? `<img class="logo" src="${esc(client.logo_uri!)}" alt="" width="48" height="48">` : "";
@@ -168,7 +170,7 @@ function consentPage(
 			<input type="hidden" name="sealed" value="${esc(sealed)}">
 			<fieldset>
 				<legend>It will be able to</legend>
-				${scopes.map((s) => `<label><input type="checkbox" name="scope" value="${esc(s)}" checked> <span>${esc(BASE_SCOPE_TEXT[s] ?? config.scopes[s] ?? s)}</span></label>`).join("")}
+				${scopes.map((s) => `<label><input type="checkbox" name="scope" value="${esc(s)}" checked> <span>${esc(config.scopes[s] ?? s)}${granted.size > 0 && !granted.has(s) ? ' <strong class="new">New</strong>' : ""}</span></label>`).join("")}
 			</fieldset>
 			<p class="fine">Access lasts up to ${days === 1 ? "1 day" : `${days} days`}. You can disconnect it at any time in your account settings. ${esc(config.organization.name)} always asks before anything is booked or charged.</p>
 			<div class="actions">

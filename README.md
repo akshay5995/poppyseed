@@ -1,6 +1,6 @@
 # Poppyseed
 
-Let personal AI agents use your Next.js site. Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org/) (Poppy for short, draft 0.1): agents find your site, sign people in with their consent, call your tools, and buy only what people approve.
+Let personal AI agents use your Next.js site. Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org/) (Poppy for short, draft 0.3): agents find your site, sign people in with their consent, call your tools, and buy only what people approve.
 
 **[withpoppyseed.dev](https://withpoppyseed.dev)**. Using a coding agent? Copy the prompt from the site and paste it in.
 

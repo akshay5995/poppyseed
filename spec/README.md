@@ -4,7 +4,7 @@ This folder holds the **Personal Agent Protocol** as Poppyseed implements it: th
 
 | Version | Status | Files |
 | --- | --- | --- |
-| [0.1](pap-0.1/README.md) | Draft, published 9 Oct 2026 | `pap-0.1/*.md` |
+| [0.3](pap-0.3/README.md) | Draft, in progress at personalagentprotocol.org | `pap-0.3/*.md` |
 
 [STATUS.md](STATUS.md) is generated. It shows every requirement, who must meet it, and how we verify it.
 
@@ -30,7 +30,7 @@ The nearest heading above a requirement gives its official section, for example 
 ## When the spec changes
 
 1. Merge the `spec-snapshot` branch the workflow pushed, and read the diff of `spec/source/`.
-2. Edit the requirement lines in `spec/pap-0.1/` to match. For a new protocol version, copy the folder (`pap-0.2/`) and edit the copy. Then run `pnpm spec:reconciled`.
+2. Edit the requirement lines in `spec/pap-<version>/` to match. For a new protocol version, move the folder to the new version (`git mv spec/pap-0.3 spec/pap-0.4`), edit it, and bump `SPEC_VERSION` in `packages/core/scripts/spec.ts`. Then run `pnpm spec:reconciled`.
 3. Run `pnpm spec:build`. It regenerates `packages/core/src/conformance/requirements.generated.ts` and `STATUS.md`.
 4. Run `pnpm spec:check`. It fails and lists every company requirement that has neither a conformance check nor a planned leg in `packages/core/src/conformance/plan.ts`.
 5. For each one, write a check in `packages/core/src/conformance/checks/`, or schedule it in `plan.ts`.
@@ -40,4 +40,4 @@ The diff of `STATUS.md` in the pull request shows reviewers exactly which rules 
 
 ## Source
 
-[`source/`](source/) holds the official text of [personalagentprotocol.org](https://personalagentprotocol.org/), fetched from the site's own Markdown pages by the `spec-snapshot` workflow, with a SHA-256 sum for each file. Never edit it. `spec:check` fails if a file in it changes without a fresh fetch, or if the fetched text changes before `spec/pap-0.1/` is reconciled with it. The official text is licensed under the Apache License 2.0 ([source/license.html](source/license.html)).
+[`source/`](source/) holds the official text of [personalagentprotocol.org](https://personalagentprotocol.org/), fetched from the site's own Markdown pages by the `spec-snapshot` workflow, with a SHA-256 sum for each file. Never edit it. `spec:check` fails if a file in it changes without a fresh fetch, or if the fetched text changes before `spec/pap-<version>/` is reconciled with it. The official text is licensed under the Apache License 2.0 ([source/license.html](source/license.html)).

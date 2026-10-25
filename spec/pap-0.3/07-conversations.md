@@ -1,6 +1,6 @@
 # Conversations
 
-Source: [spec.md, section 7](../source/docs/spec.md).
+Source: [spec.md, section 7](../source/docs/0.3/spec.md).
 
 ## 7.1 Conversation protocols
 
@@ -29,13 +29,14 @@ A Company lists conversation protocols in `agent.protocols`. The one defined tod
 - **MUST** · company · `conv.start` — Starting a conversation returns HTTP 201 with `conversation_id`, `status` and `responder`, and later messages to `{id}/messages` return HTTP 202 with the same fields. *(implied)*
 - **MUST** · agent · `conv.message-id-unique` — The Personal Agent makes each message `id` unique for the User, and retries a message with the same ID.
 - **MUST** · company · `conv.message-idempotent` — A message with an already accepted ID and the same content returns the original response without adding it again, including a retried first message; different content returns `message_id_conflict`. *(implied)*
-- **MUST** · company · `conv.wait` — With `wait` (and optionally `cursor`) on either POST, the Company accepts the message, then responds as a read of the events from that cursor would, holding the request up to `wait` seconds, with status 201 or 202. *(implied)*
+- **MUST** · company · `conv.wait` — With the `wait` query parameter (and optionally `cursor`) on either POST, the Company accepts the message, then responds as a read of the events from that cursor would, holding the request up to `wait` seconds, with status 201 or 202. *(implied)*
 
 ## 7.4 Message fields
 
 | Field | Required | Description |
 | --- | --- | --- |
 | `id` | Yes | Chosen by the Personal Agent, unique for the User |
+| `role` | No | `user` or `company`, set by the Company when it records the message |
 | `sender` | Yes | `agent` or `human` |
 | `text` | No | Natural language |
 | `data` | No | A JSON object for structured details |
@@ -47,6 +48,7 @@ A Company lists conversation protocols in `agent.protocols`. The one defined tod
 - **MAY** · agent · `conv.context-extra` — `context` may include other fields.
 - **MAY** · company · `conv.context-ignore` — A Company may ignore `context` fields beyond those defined.
 - **SHOULD** · agent · `conv.context-minimal` — Personal Agents share only what the task needs.
+- **MUST** · company · `conv.role` — The Company sets each recorded message's `role` to `user` or `company` for the side it came from, and ignores a `role` the Personal Agent sends. *(implied)*
 - **MUST** · company · `conv.context-sticky` — `context` fields a message leaves out keep their previous values, and only the Personal Agent sends `context`. *(implied)*
 
 ## 7.5 Reading events
@@ -55,9 +57,10 @@ Every event has `id`, `type` and `created_at` (RFC 3339): `message` (with `role`
 
 - **MUST** · agent · `conv.skip-unknown-events` — Personal Agents skip event types they don't recognize.
 - **MUST NOT** · agent · `conv.cursor-opaque` — Cursors are opaque, and the Personal Agent does not compare or sort them.
-- **MUST** · company · `conv.events` — Each event's `id` is also a cursor, a read without `cursor` starts at the beginning, and a read that times out returns an empty `events` list. *(implied)*
+- **MUST** · company · `conv.events` — Each event's `id` is also a cursor, a read without `cursor` starts at the beginning, a read that times out returns an empty `events` list, and every message the Company accepts is recorded as it was sent, including one with only `context`. *(implied)*
 - **MAY** · company · `conv.wait-cap` — The Company may return a read before `wait` elapses, or cap `wait`.
-- **MUST** · company · `conv.read-fields` — Every successful read includes `cursor`, `has_more`, `status` and `responder`, even with no events; `cursor` is the last event returned, or the request's cursor if there were none.
+- **MUST** · company · `conv.wait-cap-held` — A `wait` larger than the Company's cap is held for the cap, not rejected, and `wait` is a whole number of seconds, 0 or more. *(implied)*
+- **MUST** · company · `conv.read-fields` — Every successful read includes `conversation_id`, `events`, `cursor`, `has_more`, `status` and `responder`, with `events` empty when there are none; `cursor` is the last event returned, or the request's cursor if there were none.
 - **MUST** · company · `conv.cursor-expired-error` — A cursor for events the Company no longer has returns `cursor_expired`. *(implied)*
 - **SHOULD** · agent · `conv.cursor-expired` — On `cursor_expired` the Personal Agent reads from the beginning and tells the User that part of the conversation is missing.
 
@@ -65,6 +68,7 @@ Every event has `id`, `type` and `created_at` (RFC 3339): `message` (with `role`
 
 - **MAY** · company · `conv.sse` — A Company may stream events with server-sent events when a read sends `Accept: text/event-stream`, with each event's ID as the SSE `id` and the event JSON as `data`; one that doesn't stream returns JSON.
 - **MAY** · company · `conv.sse-close` — A Company may close a stream at any time, and the Personal Agent reconnects with `Last-Event-ID`.
+- **MUST** · company · `conv.last-event-id` — When a request has both `Last-Event-ID` and `cursor`, `Last-Event-ID` wins. *(implied)*
 - **MAY** · company · `conv.text-delta` — While the Company Agent writes a message, the Company may send pieces of its text as `text-delta` events with no SSE `id`.
 - **MUST NOT** · agent · `conv.text-delta-ignore` — The Personal Agent does not act on text from a `text-delta` event.
 
@@ -82,23 +86,25 @@ Every event has `id`, `type` and `created_at` (RFC 3339): `message` (with `role`
 
 ## 7.9 Handoff to a person
 
-- **MUST** · company · `conv.handoff` — A handoff request with an empty JSON object returns HTTP 202 with `status` and `responder`; the status becomes `queued`, `responder` becomes `human` when a person joins, and if no one is available the status returns to `idle` with a message saying why. *(implied)*
+- **MUST** · company · `conv.handoff` — A handoff request with an empty JSON object returns HTTP 202 with `status` and `responder`; the status becomes `queued`, `responder` becomes `human` when a person joins, and if no one is available the status returns to `idle` with a message saying why; a handoff to a conversation already `queued` or with a person returns HTTP 202 with the current state and changes nothing. *(implied)*
 
 ## 7.10 Direct Conversations
 
 - **MUST** · company · `conv.direct` — The parent of a Direct Conversation is open, belongs to the same owner, is not itself a Direct Conversation, and has at most one open Direct Conversation; otherwise the Company returns `conversation_not_found`, `conversation_closed` or `direct_conversation_open`.
 - **MUST** · company · `conv.direct-parent` — Opening and closing a Direct Conversation adds `direct_opened` and `direct_closed` events to the parent, the parent refuses messages and handoff with `direct_conversation_open` while it is open, and closing the parent closes its open Direct Conversation. *(implied)*
+- **MUST** · company · `conv.user-requested` — A `user_requested` event, with a short `reason`, doesn't change `status` or `responder`. *(implied)*
 
 ## 7.11 Sign-in during a conversation
 
 - **SHOULD** · company · `conv.authorization-message` — When the Company adds an `authorization` event, it also asks in a message.
 - **MAY** · agent · `conv.token-switch` — The Personal Agent may switch to a new Session Token partway through a conversation, or continue it in a new Session, as long as the token matches the conversation's owner.
 - **MUST** · company · `conv.scopes` — Before reading account information or making a change, the Company Agent checks for the required scopes, whoever is handling the conversation, and sending a message does not authorize an account action. *(implied)*
-- **MUST** · company · `conv.account-bound` — Once a conversation has used the User's account, a request on it from a token that isn't signed in to that account gets `sign_in_required`. *(implied)*
+- **MUST** · company · `conv.authorization-event` — When the Company Agent needs the User's account or more scopes, the Company adds an `authorization` event with `error` `insufficient_scope` and the needed `scope`, and the conversation stays open. *(implied)*
+- **MUST** · company · `conv.account-bound` — Once a conversation has used the User's account, a request on it from a token for the same User that isn't signed in to that account gets `insufficient_scope`, and after a sign-out the conversation stays open. *(implied)*
 
 ## 7.12 Closing
 
-- **MUST** · company · `conv.close` — Closing with an empty JSON object adds a `state` event with `status: "closed"`, cancels any pending handoff and returns HTTP 200; a closed conversation takes no more messages and its events stay readable. *(implied)*
+- **MUST** · company · `conv.close` — Closing with an empty JSON object adds a `state` event with `status: "closed"`, cancels any pending handoff and returns HTTP 200 with `status` and `responder`; closing a closed conversation returns the same response and adds no event; a closed conversation takes no more messages and its events stay readable. *(implied)*
 
 ## 7.13 Errors
 
@@ -110,5 +116,8 @@ Every event has `id`, `type` and `created_at` (RFC 3339): `message` (with `role`
 | `message_id_conflict` | 409 |
 | `invalid_cursor` | 400 |
 | `cursor_expired` | 410 |
+| `invalid_request` | 400 |
+| `extension_required` | 403 |
+| `rate_limited` | 429 |
 
 - **MUST** · company · `conv.errors` — Non-token errors have a JSON body with an `error` code and the statuses above, and an unknown Conversation ID and one belonging to someone else return the same `conversation_not_found`. *(implied)*

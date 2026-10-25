@@ -22,7 +22,14 @@ function readUntilFinal(t: Harness, agent: TestAgent, token: string, id: string)
 /** The tool called over MCP: its structuredContent. */
 async function overMcp(t: Harness, session: Session, tool: ActionTool) {
 	const mcp = await t.mcpToken(session);
-	return session.agent.mcp<{ content?: { type: string; text?: string }[]; structuredContent?: { operation?: Operation } }>(mcp.url, mcp.token, "tools/call", { name: tool.name, arguments: tool.arguments });
+	return session.agent.mcp<{ isError?: boolean; content?: { type: string; text?: string }[]; structuredContent?: { operation?: Operation } }>(mcp.url, mcp.token, "tools/call", { name: tool.name, arguments: tool.arguments });
+}
+
+/** Signs the Session out, then in again to the same account, for a token that can still read its operations. */
+async function signOutAndBack(t: Harness, session: Session): Promise<string> {
+	if (!session.token.refresh_token) return session.token.access_token;
+	await session.agent.revoke(session.token.refresh_token);
+	return (await t.signInDirect(session.agent, session.token.session)).access_token;
 }
 
 /** Whether a tool's response carries an operation. */
@@ -181,7 +188,7 @@ export const operationChecks = [
 			const tool = t.action("action");
 			const { agent, token } = await sessionFor(t, tool);
 			const browser = await t.browser();
-			await browser.post(t.endpoint("browserSession"), new URLSearchParams({ assertion: await agent.browserAssertion(token.session_id, `https://${t.company.poppy.organization.domain}/`) }));
+			t.equal((await agent.joinBrowser(browser, token.session)).status, 303, "joining the browser to the Session");
 			const op = await t.propose(agent, token.access_token, tool);
 			const [onSite] = await Promise.all([
 				browser.post(t.url(page.replace("{id}", op.operation_id)), new URLSearchParams({ revision: String(op.revision) })),
@@ -232,16 +239,20 @@ export const operationChecks = [
 
 			if (token.refresh_token) {
 				await agent.revoke(token.refresh_token);
-				await t.refused("confirming after signing out", agent.confirm(token.access_token, op), { status: 403, error: "sign_in_required" });
-				t.equal((await agent.operation(token.access_token, op.operation_id)).operation.state, "proposed", "a refused confirm does nothing");
+				await t.refused("confirming with the signed-in token after signing out", agent.confirm(token.access_token, op), { status: 401, error: "invalid_token" });
+				// The same Session, renewed signed out: the operation stays, waiting for a sign-in (spec 4.9).
+				const signedOut = await agent.startSession({ session: token.session });
+				await t.refused("confirming signed out", agent.confirm(signedOut.access_token, op), { status: 403, error: "insufficient_scope" });
+				const again = await t.signInDirect(agent, token.session);
+				t.equal((await agent.operation(again.access_token, op.operation_id)).operation.state, "proposed", "a refused confirm does nothing");
 			}
 		},
 	}),
 
 	check({
 		id: "ops/access",
-		title: "Only the operation's Session, or its account's Sessions, can use it; others get operation_not_found",
-		covers: ["ops.access", "ops.errors"],
+		title: "Only the operation's Session, or Sessions signed in to its account, can use it; a signed-out Session of the same User gets insufficient_scope",
+		covers: ["ops.access", "ops.errors", "signout.after"],
 		leg: 3,
 		async run(t: Harness) {
 			const tool = t.action("action");
@@ -255,12 +266,13 @@ export const operationChecks = [
 			await t.refused("another agent cancelling", stranger.agent.cancel(theirs, op.operation_id), NOT_FOUND);
 
 			const otherSession = await agent.startSession();
-			await t.refused("a signed-out Session of the same agent", agent.operation(otherSession.access_token, op.operation_id), NOT_FOUND);
+			const signedOut = tool.scope ? { status: 403, error: "insufficient_scope" } : NOT_FOUND;
+			await t.refused("a signed-out Session of the same agent and User", agent.operation(otherSession.access_token, op.operation_id), signedOut);
 			await t.refused("an unknown operation", agent.operation(token.access_token, "op_does_not_exist"), NOT_FOUND);
 
 			if (token.refresh_token) {
 				const sameAccount = await agent.refresh(token.refresh_token);
-				t.ok(sameAccount.session_id !== token.session_id, "a second Session");
+				t.ok(sameAccount.session.jkt !== token.session.jkt, "a second Session");
 				t.equal((await agent.operation(sameAccount.access_token, op.operation_id)).operation.operation_id, op.operation_id, "another Session signed in to the same account reads it");
 			}
 		},
@@ -298,8 +310,8 @@ export const operationChecks = [
 			t.ok(confirmed.retryAfter, "an in_progress confirm response has Retry-After");
 			const cancelling = await agent.cancel(token.access_token, op.operation_id);
 			t.ok(cancelling.state === "in_progress" || FINAL.includes(cancelling.state), `cancelling in progress shows the current state, got ${cancelling.state}`);
-			if (token.refresh_token) await agent.revoke(token.refresh_token);
-			const done = await readUntilFinal(t, agent, token.access_token, op.operation_id);
+			const reader = await signOutAndBack(t, { agent, token });
+			const done = await readUntilFinal(t, agent, reader, op.operation_id);
 			t.ok(FINAL.includes(done.state), "the operation reaches a final state");
 			t.ok(done.result?.summary, "with result.summary");
 		},
@@ -307,8 +319,8 @@ export const operationChecks = [
 
 	check({
 		id: "ops/require-extension",
-		title: "Agents that don't list operations never get one; the action answers extension_required",
-		covers: ["ops.require-extension", "ops.errors"],
+		title: "Agents that don't list operations never get one: OpenAPI answers extension_required, MCP an ordinary tool error",
+		covers: ["ops.require-extension", "ops.mcp-tool-error", "extensions.required-shape", "apis.mcp-extension-required"],
 		leg: 3,
 		async run(t: Harness) {
 			const tool = t.action("action");
@@ -320,8 +332,12 @@ export const operationChecks = [
 				t.equal(response.status, 403, "status when refusing");
 				t.equal(body?.error, "extension_required", "error");
 				t.equal(body?.extension, "operations", "extension");
+				const challenge = response.headers.get("www-authenticate") ?? "";
+				t.ok(challenge.includes('error="extension_required"') && challenge.includes('extension="operations"'), `at an API, extension_required goes in WWW-Authenticate: ${challenge}`);
 			}
-			t.ok(!(await overMcp(t, session, tool)).structuredContent?.operation, "no operation over MCP either");
+			const mcp = await overMcp(t, session, tool);
+			t.ok(!mcp.structuredContent?.operation, "no operation over MCP either");
+			t.ok(!JSON.stringify(mcp).includes("extension_required"), "MCP can't refuse one tool with extension_required, so it is an ordinary tool result");
 		},
 	}),
 

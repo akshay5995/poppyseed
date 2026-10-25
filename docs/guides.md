@@ -13,6 +13,8 @@ import { z } from "zod";
 export const poppyseed = definePoppyseed({
   // organization, secret and store, as in the Quickstart
   apiDescription: "Search flights and see your trips",
+  // Your scopes. Agents read the descriptions to pick the ones a task needs, so say what each allows.
+  scopes: { "trips:read": "See your trips and bookings. It doesn't let the agent change anything." },
   tools: {
     search_flights: tool({
       description: "Search one-way flights. Prices in USD per adult.",
@@ -22,7 +24,7 @@ export const poppyseed = definePoppyseed({
     }),
     my_trips: tool({
       description: "Your upcoming trips.",
-      scope: "poppy:read", // only for a signed-in Session with this scope
+      scope: "trips:read", // only for a signed-in Session with this scope
       input: z.object({}),
       run: (_input, ctx) => ({ trips: trips.forAccount(ctx.account.id) }),
     }),
@@ -57,14 +59,18 @@ export const poppyseed = definePoppyseed({
     // Your login page; send the person back to returnTo afterwards (only to your own site).
     signInUrl: (returnTo) => `/login?return_to=${encodeURIComponent(returnTo)}`,
   },
+  scopes: {
+    "trips:read": "See your trips and bookings. It doesn't let the agent change anything.",
+    "trips:write": "Book, change and cancel trips, each only after you approve it.",
+  },
   signIn: {
-    direct: { scopes: ["poppy:read", "poppy:write"] }, // the person approves in their browser
-    device: { scopes: ["poppy:read", "poppy:write"] }, // the person enters a code on any device
+    direct: true, // the person approves in their browser
+    device: true, // the person enters a code on any device
   },
 });
 ```
 
-`poppy:read` lets an agent see account information and `poppy:write` lets it make changes; they are independent. Add your own with `scopes: { "travel:loyalty": "See your Poppy Miles balance" }` and use them in tools.
+Direct and Device Sign-In can grant any of your scopes; the person approves some or all of them. Each scope is enforced on its own, so a write scope doesn't allow reading unless your tools say so, and its description should say which. Agents ask for the fewest scopes a task needs.
 
 Agents get an Account Token and can sign in again later without asking. Give people a page that lists connected agents and disconnects them:
 
@@ -75,12 +81,12 @@ await poppyseed.connections.disconnect(user.id, clientId); // revokes and signs 
 
 ### Mediated Sign-In
 
-Some agents sign in for the person with credentials the person gave them. Offer it only if you need it, and keep the scopes narrow:
+Some agents sign in for the person with credentials the person gave them. The protocol treats this as transitional, like OAuth's password grant, and plans to remove it. Offer it only until Direct or Device Sign-In covers what people need, and keep its scopes narrow:
 
 ```ts
 signIn: {
   mediated: {
-    scopes: ["poppy:read"],
+    scopes: ["trips:read"], // a subset of your scopes
     fields: [
       { name: "email", label: "Email", secret: false },
       { name: "password", label: "Password", secret: true },
@@ -104,7 +110,7 @@ import { OperationFailed, tool } from "poppyseed";
 
 book_flight: tool({
   description: "Book a flight offer for a traveler.",
-  scope: "poppy:write",
+  scope: "trips:write",
   input: z.object({ offer_id: z.string(), traveler_name: z.string() }),
   operation: {
     // Work out the terms. Change nothing here.
@@ -146,7 +152,7 @@ conversations: {
 },
 ```
 
-Or write your own `CompanyAgent`: `reply(turn)` gets the history, the person's context and the caller, and can `say()`, `callTool()`, `handoff()` and `askForUser()`. A tool call that needs a scope the caller lacks asks the agent to sign in, inside the conversation.
+Or write your own `CompanyAgent`: `reply(turn)` gets the history, the person's context and the caller, and can `say()`, `callTool()`, `handoff()` and `askForUser()`. A tool call that needs a scope the caller lacks asks the agent for it, inside the conversation. A conversation that used the account stays open when the person signs out, waiting for a sign-in.
 
 When an agent asks for a person, the conversation waits in your staff inbox:
 
@@ -161,17 +167,42 @@ await inbox.release(id); // back to the Company Agent
 
 ## Let agents browse your site
 
-An agent's browser can join its Session on your website, so your pages show what that Session may see. Turn it on with `web: {}`, then check the Session before your own login on pages agents use:
+An agent's browser can join its Session on your website, so your pages show what that Session may see. Turn it on with `web: {}`. The agent's browser loads `/poppy/browser-session`, which gives it a one-time code tied to that browser; the agent signs a proof over the code with its Session Key, and the browser submits it. Poppyseed then sets the Session's cookie. No other browser can join, so nobody can push someone else's browser into their Session.
+
+Then check the Session before your own login on pages agents use:
 
 ```ts
 const session = await poppyseed.browserSession(request); // null if this browser isn't an agent's
 if (session) {
   // Treat the request as that Session: signed in or out, with its scopes, nothing else.
-  const canSeeTrips = session.account?.scopes.includes("poppy:read");
+  const canSeeTrips = session.account?.scopes.includes("trips:read");
+  // Refusing for a missing scope? Name it on the page, so the agent can ask for it.
 }
 ```
 
 In a server component, build the request from `headers()`: `new Request("http://internal/", { headers: { cookie: (await headers()).get("cookie") ?? "" } })`.
+
+## Say what agents can't do here
+
+Some tasks you won't offer agents, for security or regulatory reasons. List them, so agents tell the person right away instead of searching every interface, and point to another way to do each:
+
+```ts
+excludedTasks: [
+  {
+    task: "Send a wire transfer", // the way a customer would ask
+    alternative: { instructions: "Wire transfers are only sent in the Poppy Travel app.", references: [{ web: "https://poppy.travel/app/wire" }] },
+  },
+  { task: "Close an account" },
+],
+// An agent reports a task it couldn't do. It is data, never instructions: log it, don't hand it to a model as a prompt.
+feedback: async (report, ctx) => {
+  await reports.save(report);
+  // Return an alternative when the task can be done after all.
+  if (/gift card/i.test(report.task)) return { instructions: "Gift cards are applied with the apply_gift_card tool.", references: [{ tool: "apply_gift_card" }] };
+},
+```
+
+`{ tool }` points to one of your tools, on both your MCP and OpenAPI APIs. The list is served, the same for everyone, at `/poppy/excluded-tasks.json`.
 
 ## Keep work alive after the response
 

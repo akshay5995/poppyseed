@@ -13,5 +13,5 @@ export async function viewer(): Promise<{ traveler?: Traveler; via: "agent" | "s
 	const session = await poppyseed.browserSession(request);
 	if (session) return { traveler: travelerById(session.account?.id), via: "agent", scopes: session.account?.scopes ?? [] };
 	const traveler = siteTraveler(h.get("cookie"));
-	return traveler ? { traveler, via: "site", scopes: ["poppy:read", "poppy:write", "travel:loyalty"] } : { via: "nobody", scopes: [] };
+	return traveler ? { traveler, via: "site", scopes: ["trips:read", "trips:write", "travel:loyalty"] } : { via: "nobody", scopes: [] };
 }

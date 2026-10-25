@@ -165,7 +165,7 @@ export const Grow: React.FC = () => {
 					title="poppyseed.config.ts"
 					lines={[
 						"book_flight: tool({",
-						'  scope: "poppy:write", // needs sign-in',
+						'  scope: "trips:write", // needs sign-in',
 						"  input: z.object({ offer_id: z.string() }),",
 						"  operation: {",
 						"    propose: (input) => ({ summary, terms }),",

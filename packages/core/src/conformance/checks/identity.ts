@@ -40,13 +40,15 @@ export const identityChecks = [
 	refusals(
 		{
 			id: "identity/client-assertion-claims",
-			title: "Client assertions must name the client as iss and sub, and the endpoint as aud",
-			covers: ["identity.private-key-jwt"],
+			title: "Client assertions must name the client as iss and sub, and the issuer as aud, never an endpoint",
+			covers: ["identity.private-key-jwt", "identity.client-assertion-aud"],
 			leg: 1,
 			expect: INVALID_CLIENT,
 		},
 		[
 			{ label: "client assertion for another audience", request: (agent) => ({ clientAssertion: { audience: `${agent.company.origin}/elsewhere` } }) },
+			{ label: "client assertion addressed to the token endpoint", request: (agent) => ({ clientAssertion: { audience: agent.company.metadata.token_endpoint } }) },
+			{ label: "client assertion whose aud is a list holding the issuer", request: (agent) => ({ clientAssertion: { claims: { aud: [agent.company.metadata.issuer] } } }) },
 			{ label: "client assertion with sub other than client_id", request: { clientAssertion: { subject: "someone-else" } } },
 			{ label: "client assertion with another issuer", request: { clientAssertion: { issuer: IMPOSTOR } } },
 		],
@@ -55,16 +57,16 @@ export const identityChecks = [
 	check({
 		id: "identity/client-assertion-replay",
 		title: "Client and session assertions are accepted once, and the session assertion must come from the client",
-		covers: ["identity.private-key-jwt", "sessions.verify-assertions"],
+		covers: ["identity.private-key-jwt", "sessions.verify-assertions", "identity.client-assertion-replay"],
 		leg: 1,
 		async run(t: Harness) {
 			const agent = await t.agent();
-			const tokenUrl = agent.company.metadata.token_endpoint;
-			const clientAssertion = await agent.signAssertion(agent.clientId, tokenUrl);
+			const issuer = agent.company.metadata.issuer;
+			const clientAssertion = await agent.signAssertion(agent.clientId, issuer);
 			await agent.startSession({ clientAssertion });
 			await t.refused("replayed client assertion", agent.startSession({ clientAssertion }), INVALID_CLIENT);
 
-			const assertion = await agent.signAssertion(agent.userId, tokenUrl);
+			const assertion = await agent.signAssertion(agent.userId, issuer);
 			await agent.startSession({ assertion });
 			await t.refused("replayed session assertion", agent.startSession({ assertion }), INVALID_GRANT);
 			await t.refused("session assertion whose iss is another client", agent.startSession({ assertion: { subject: "usr_x", issuer: IMPOSTOR } }), INVALID_GRANT);
@@ -80,7 +82,7 @@ export const identityChecks = [
 			expect: INVALID_CLIENT,
 		},
 		[
-			{ label: "client assertion living 300 seconds", request: { clientAssertion: { lifetime: 300 } } },
+			{ label: "client assertion living 600 seconds", request: { clientAssertion: { lifetime: 600 } } },
 			{ label: "client assertion with an embedded jwk", request: (agent) => ({ clientAssertion: { header: { jwk: agent.signingPublicJwk } } }) },
 		],
 	),
@@ -114,7 +116,7 @@ export const identityChecks = [
 	]),
 
 	refusals(
-		{ id: "identity/private-agent-urls", title: "Agent metadata on loopback or private addresses is refused", covers: ["guide.private-addresses"], leg: 1, expect: INVALID_CLIENT },
+		{ id: "identity/private-agent-urls", title: "Agent metadata on loopback or private addresses is refused", covers: ["guide.private-addresses", "discovery.private-addresses"], leg: 1, expect: INVALID_CLIENT },
 		(t) => {
 			if (!t.target.strictAgentUrls) t.skip("the target accepts loopback agents (strictAgentUrls is off)");
 			return ["127.0.0.1", "10.0.0.8", "localhost", "localhost.", "[::ffff:169.254.169.254]", "[::ffff:127.0.0.1]", "[64:ff9b::10.0.0.8]"].map((host) => {

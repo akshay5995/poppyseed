@@ -6,20 +6,21 @@ const INVALID_PROOF = { status: 400, error: "invalid_dpop_proof", challenge: "DP
 
 export const dpopChecks = [
 	refusals(
-		{ id: "dpop/required", title: "Session tokens other than MCP Bearer tokens need a DPoP proof", covers: ["sessions.jwt-bearer", "dpop.errors", "sessions.errors"], leg: 1, expect: INVALID_PROOF },
+		{ id: "dpop/required", title: "Every token request needs a DPoP proof", covers: ["sessions.jwt-bearer", "dpop.errors", "sessions.errors"], leg: 1, expect: INVALID_PROOF },
 		[{ label: "session request without DPoP", request: { dpop: null } }],
 	),
 
 	check({
 		id: "dpop/replay",
-		title: "A DPoP proof is accepted once",
-		covers: ["dpop.verify"],
+		title: "The token endpoint accepts a DPoP proof once",
+		covers: ["dpop.verify", "dpop.replay-token-endpoint"],
 		leg: 1,
 		async run(t: Harness) {
 			const agent = await t.agent();
-			const proof = await agent.dpopProof("POST", agent.company.metadata.token_endpoint);
-			await agent.startSession({ dpop: proof });
-			await t.refused("replayed proof", agent.startSession({ dpop: proof }), INVALID_PROOF);
+			const session = await agent.newSessionKey();
+			const proof = await agent.dpopProof("POST", agent.company.metadata.token_endpoint, { session });
+			await agent.startSession({ session, dpop: proof });
+			await t.refused("replayed proof", agent.startSession({ session, dpop: proof }), INVALID_PROOF);
 		},
 	}),
 

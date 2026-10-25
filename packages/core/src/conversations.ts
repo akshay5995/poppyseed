@@ -32,7 +32,7 @@ export interface Message {
 export type ConversationEvent = { id: string; created_at: string } & (
 	| { type: "message"; message: Message }
 	| ({ type: "state" } & ConversationState)
-	| { type: "authorization"; error: "sign_in_required" | "insufficient_scope"; scope: string }
+	| { type: "authorization"; error: "insufficient_scope"; scope: string }
 	| { type: "user_requested"; reason: string }
 	| { type: "direct_opened" | "direct_closed"; conversation_id: string }
 );
@@ -42,7 +42,8 @@ type NewEvent = ConversationEvent extends infer E ? (E extends ConversationEvent
 
 interface ConversationRecord {
 	id: string;
-	owner: { clientId: string; userId: string; accountId: string | null };
+	/** Once the conversation uses an account it belongs to it, with the scope it used (spec 7.2). */
+	owner: { clientId: string; userId: string; account: { id: string; scope: string } | null };
 	/** A Direct Conversation names its parent; a parent tracks its Direct Conversations, at most one open (spec 7.10). */
 	link: { kind: "direct"; parentId: string } | { kind: "parent"; open: string | null; directs: string[] };
 	state: ConversationState;
@@ -79,7 +80,7 @@ export interface AgentTurn {
 	say(text: string, extra?: { data?: Record<string, unknown>; operation?: OperationView }): Promise<void>;
 	/**
 	 * Calls one of your tools with the caller's scopes. Missing scopes add an
-	 * `authorization` event and a message asking to sign in (spec 7.11).
+	 * `authorization` event and a message asking for them (spec 7.11).
 	 */
 	callTool(name: string, input: unknown): Promise<ToolResult>;
 	/** Asks for a person at your company (spec 7.9). */
@@ -119,7 +120,6 @@ const key = {
 	conversation: (id: string) => `conversation:${id}`,
 	message: (clientId: string, userId: string, messageId: string) => `conversation-message:${clientId}:${userId}:${messageId}`,
 	queue: "conversation-queue",
-	account: (clientId: string, userId: string, accountId: string) => `conversation-account:${clientId}:${userId}:${accountId}`,
 };
 const RETAIN_MS = 90 * 86_400_000;
 
@@ -183,7 +183,7 @@ export class Conversations {
 		}
 		const conversation: ConversationRecord = {
 			id,
-			owner: { clientId: ctx.clientId, userId: ctx.userId, accountId: null },
+			owner: { clientId: ctx.clientId, userId: ctx.userId, account: null },
 			link: typeof parentId === "string" ? { kind: "direct", parentId } : { kind: "parent", open: null, directs: [] },
 			state: { status: "idle", responder: "agent" },
 			context: {},
@@ -352,27 +352,24 @@ export class Conversations {
 		const ctx = c.caller;
 		const scope = this.tools.list.find((t) => t.name === name)?.scope;
 		if (scope && !ctx.account?.scopes.includes(scope)) {
-			// A message can't authorize an account action: ask to sign in, in the conversation (spec 7.11).
-			const error = ctx.account ? "insufficient_scope" : "sign_in_required";
+			// A message can't authorize an account action: ask for the scope, in the conversation (spec 7.11).
 			await this.mutate(id, (cur) => {
-				this.append(cur, { type: "authorization", error, scope });
+				this.append(cur, { type: "authorization", error: "insufficient_scope", scope });
 				const org = this.config.organization.name;
-				const text = error === "sign_in_required" ? `To do that I need you to sign in to your ${org} account.` : `To do that I need more access to your ${org} account.`;
+				const text = ctx.account ? `To do that I need more access to your ${org} account.` : `To do that I need you to sign in to your ${org} account.`;
 				this.append(cur, { type: "message", message: { id: randomId("msg"), role: "company", sender: cur.state.responder, text } });
 			});
-			return { kind: "authorization", error, scope };
+			return { kind: "authorization", error: "insufficient_scope", scope };
 		}
 		const result = await this.tools.run(name, input, guardedFrom(ctx));
 		// Once a conversation uses an account, it belongs to that account (spec 7.2).
-		if (scope && ctx.account && result.kind !== "error") await this.bindAccount(id, ctx.account.id);
-		return result;
-	}
-
-	/** Closes the conversations that used an account when its Account Token is revoked (guide: Conversations). */
-	async closeForAccount(clientId: string, userId: string, accountId: string): Promise<void> {
-		for (const id of (await this.store.get<string[]>(key.account(clientId, userId, accountId))) ?? []) {
-			await this.close(id, { reason: "This conversation was closed because you signed out." }).catch(() => {});
+		if (scope && ctx.account && result.kind !== "error") {
+			const account = { id: ctx.account.id, scope };
+			await this.mutate(id, (cur) => {
+				cur.owner.account ??= account;
+			});
 		}
+		return result;
 	}
 
 	// ---- Internals ----
@@ -381,10 +378,10 @@ export class Conversations {
 	private async owned(id: string, ctx: SessionContext): Promise<ConversationRecord> {
 		const c = ID.test(id) ? await this.store.get<ConversationRecord>(key.conversation(id)) : undefined;
 		if (!c || c.owner.clientId !== ctx.clientId || c.owner.userId !== ctx.userId) throw notFound();
-		if (c.owner.accountId !== null) {
-			// Signed out of the account the conversation used: sign in again. Another account: not yours.
-			if (!ctx.account) throw scopeError("DPoP", false, "poppy:read");
-			if (ctx.account.id !== c.owner.accountId) throw notFound();
+		if (c.owner.account !== null) {
+			// Signed out of the account the conversation used: it stays open for a sign-in (spec 4.9). Another account: not yours.
+			if (!ctx.account) throw scopeError(c.owner.account.scope);
+			if (ctx.account.id !== c.owner.account.id) throw notFound();
 		}
 		return c;
 	}
@@ -472,11 +469,14 @@ export class Conversations {
 	}
 
 	private async handoff(id: string, check: (c: ConversationRecord) => void): Promise<ConversationRecord> {
+		let already = false;
 		const queued = await this.mutate(id, (c) => {
 			check(c);
-			if (c.state.responder === "agent" && c.state.status !== "queued") this.setState(c, { status: "queued", responder: "agent" });
+			// Already queued or with a person: the current state, changing nothing (spec 7.9).
+			already = c.state.status === "queued" || c.state.responder === "human";
+			if (!already) this.setState(c, { status: "queued", responder: "agent" });
 		});
-		if (queued.state.status !== "queued") return queued;
+		if (already || queued.state.status !== "queued") return queued;
 		if (await this.settings.handoff?.available((await this.get(id))!)) {
 			await this.store.update<string[]>(key.queue, (ids = []) => (ids.includes(id) ? ids : [...ids, id]));
 			return queued;
@@ -573,14 +573,6 @@ export class Conversations {
 		});
 	}
 
-	private async bindAccount(id: string, accountId: string): Promise<void> {
-		const c = await this.mutate(id, (cur) => {
-			cur.owner.accountId ??= accountId;
-		});
-		await this.store.update<string[]>(key.account(c.owner.clientId, c.owner.userId, accountId), (ids = []) => (ids.includes(id) ? ids : [...ids, id]), {
-			expiresAt: Date.now() + RETAIN_MS,
-		});
-	}
 }
 
 function parseMessage(input: unknown): Message {
@@ -612,7 +604,7 @@ export async function conversationsEndpoint(
 ): Promise<Response> {
 	const url = new URL(request.url);
 	const wait = Number(url.searchParams.get("wait") ?? "0");
-	if (!Number.isFinite(wait) || wait < 0) throw invalidRequest("wait must be a number of seconds");
+	if (!Number.isInteger(wait) || wait < 0) throw invalidRequest("wait must be a whole number of seconds");
 	const cursor = url.searchParams.get("cursor");
 	const noStore = { "cache-control": "no-store" };
 	// With wait, a POST responds as a read from the cursor would (spec 7.3).
