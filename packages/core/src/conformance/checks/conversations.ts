@@ -248,6 +248,11 @@ export const conversationChecks = [
 				t.ok(events.some((e) => e.type === "state" && e.responder === "human"), "a state event with responder human when the person joins");
 				const human = events.find((e) => e.message?.sender === "human" && e.message.role === "company");
 				t.equal(human?.message?.role, "company", "a person's message keeps role company");
+				// A person is handling it already: a handoff returns the current state and changes nothing (spec 7.9).
+				const before = (await agent.events(token.access_token, id)).events.length;
+				const repeat = await agent.handoff(token.access_token, id);
+				t.equal(`${repeat.httpStatus} ${repeat.status} ${repeat.responder}`, "202 idle human", "a handoff while a person handles the conversation");
+				t.equal((await agent.events(token.access_token, id)).events.length, before, "and changes nothing");
 			} else {
 				// Without a staff hook the suite can't make a person join. Staying queued is fine;
 				// a handoff that goes back to idle must say why in a message.
