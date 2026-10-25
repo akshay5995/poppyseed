@@ -440,8 +440,8 @@ export const conversationChecks = [
 			}
 			const reader = response.body!.getReader();
 			let text = "";
-			// SSE allows "id:x" and "id: x", and lines may end in CRLF.
-			const idLine = /^id: ?(.*?)\r?$/m;
+			// SSE allows "id:x" and "id: x", and lines may end in CRLF. Only a whole line counts: a chunk can end mid-line.
+			const idLine = /^id: ?(.*?)\r?\n/m;
 			while (!idLine.test(text)) {
 				const chunk = await reader.read();
 				if (chunk.done) break;
