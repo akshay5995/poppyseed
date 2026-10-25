@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-10-10T14:51:52.349Z",
+  "recordedAt": "2026-10-25T13:26:36.381Z",
   "origin": "http://localhost:3000",
   "steps": [
     {
@@ -13,7 +13,7 @@
         "apis: mcp, openapi",
         "extensions: operations"
       ],
-      "at": 4
+      "at": 2
     },
     {
       "id": "session",
@@ -23,10 +23,10 @@
       "status": 200,
       "lines": [
         "grant: jwt-bearer, signed by the agent's key",
-        "token_type: DPoP · signed_in: false",
-        "session_id: ses_wXEK16ok…"
+        "token_type: DPoP · signed out",
+        "session key: fT1NC-jNeT-u…"
       ],
-      "at": 1125
+      "at": 17
     },
     {
       "id": "search",
@@ -35,11 +35,11 @@
       "request": "POST /mcp · tools/call search_flights",
       "status": 200,
       "lines": [
-        "SFO → LIS · 2026-10-24 · 12 offers",
-        "Poppy Air PY1132 · departs 07:03",
-        "$775.00"
+        "SFO → LIS · 2026-11-08 · 12 offers",
+        "United UA516 · departs 13:54",
+        "$723.00"
       ],
-      "at": 1149
+      "at": 61
     },
     {
       "id": "device",
@@ -48,11 +48,11 @@
       "request": "POST /oauth/device",
       "status": 200,
       "lines": [
-        "user_code: ZMGM-MDQT",
-        "scope: poppy:read poppy:write",
+        "user_code: PCDG-PQLD",
+        "scope: trips:read trips:write",
         "verify at /poppy/device"
       ],
-      "at": 1158
+      "at": 65
     },
     {
       "id": "approve",
@@ -62,10 +62,10 @@
       "status": 200,
       "lines": [
         "signed in to poppy.travel as maya@poppy.travel",
-        "code ZMGM-MDQT matches",
-        "approves poppy:read, poppy:write"
+        "code PCDG-PQLD matches",
+        "approves trips:read, trips:write"
       ],
-      "at": 1172
+      "at": 76
     },
     {
       "id": "signed-in",
@@ -74,11 +74,11 @@
       "request": "POST /oauth/token · device_code",
       "status": 200,
       "lines": [
-        "signed_in: true",
-        "scope: poppy:read poppy:write",
+        "signed in",
+        "scope: trips:read trips:write",
         "refresh_token: an Account Token for next time"
       ],
-      "at": 1184
+      "at": 82
     },
     {
       "id": "propose",
@@ -87,22 +87,22 @@
       "request": "POST /poppy/tools/book_flight",
       "status": 202,
       "lines": [
-        "operation op_m0TGbkXSB… · revision 1 · proposed",
-        "Book Poppy Air PY1132, San Francisco to Lisbon, departing 2026-10-24 at 07:03 (America/Los_Angeles), economy Basic fare (non-refundable, changes $75.00, 0 checked bags), for Maya Chen. $775.00 will be charged to the card on file."
+        "operation op_gfkaOT1Pc… · revision 1 · proposed",
+        "Book United UA516, San Francisco to Lisbon, departing 2026-11-08 at 13:54 (America/Los_Angeles), economy Basic fare (non-refundable, changes $75.00, 0 checked bags), for Maya Chen. $723.00 will be charged to the card on file."
       ],
-      "at": 1201
+      "at": 92
     },
     {
       "id": "confirm",
       "title": "Maya says yes; the agent confirms",
       "actor": "agent",
-      "request": "POST /poppy/operations/op_m0TGbkXSB…/confirm",
+      "request": "POST /poppy/operations/op_gfkaOT1Pc…/confirm",
       "status": 200,
       "lines": [
         "state: succeeded",
-        "Booked: reference PT-1DXA7J. $775.00 charged to the card on file."
+        "Booked: reference PT-1MVJT6. $723.00 charged to the card on file."
       ],
-      "at": 1213
+      "at": 97
     },
     {
       "id": "trips",
@@ -112,9 +112,9 @@
       "status": 200,
       "lines": [
         "1 trip, newest:",
-        "PT-1DXA7J · Poppy Air PY1132 SFO→LIS 2026-10-24 07:03 (America/Los_Angeles)"
+        "PT-1MVJT6 · United UA516 SFO→LIS 2026-11-08 13:54 (America/Los_Angeles)"
       ],
-      "at": 1219
+      "at": 100
     },
     {
       "id": "chat",
@@ -124,14 +124,14 @@
       "status": 201,
       "lines": [
         "agent: What trips do I have?",
-        "Poppy Travel: You have 1 trip(s): PT-1DXA7J, Poppy Air PY1132 SFO→LIS 2026-10-24 07:03 (America/Los_Angeles)."
+        "Poppy Travel: You have 1 trip(s): PT-1MVJT6, United UA516 SFO→LIS 2026-11-08 13:54 (America/Los_Angeles)."
       ],
-      "at": 1236
+      "at": 109
     }
   ],
   "proof": {
-    "checks": 98,
-    "rules": 147,
-    "run": "20261010T144008Z"
+    "checks": 104,
+    "rules": 192,
+    "run": "20261025T131437Z"
   }
 }
