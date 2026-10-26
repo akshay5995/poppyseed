@@ -39,10 +39,10 @@ Tell the checks which tools and test data to use:
 ```json
 {
   "publicTool": { "name": "search_flights", "arguments": { "from": "SFO", "to": "LIS", "date": "2026-10-23" } },
-  "scopedTool": { "name": "my_trips", "arguments": {}, "scope": "poppy:read" },
-  "writeTool": { "name": "update_profile", "arguments": { "nickname": "M" } },
+  "scopedTool": { "name": "my_trips", "arguments": {}, "scope": "trips:read" },
+  "writeTool": { "name": "update_profile", "arguments": { "nickname": "M" }, "scope": "profile:write" },
   "operations": {
-    "action": { "name": "book_flight", "arguments": { "offer_id": "OF-1", "traveler_name": "Maya" }, "revisedArguments": { "offer_id": "OF-1", "traveler_name": "Maya Chen" }, "scope": "poppy:write" }
+    "action": { "name": "book_flight", "arguments": { "offer_id": "OF-1", "traveler_name": "Maya" }, "revisedArguments": { "offer_id": "OF-1", "traveler_name": "Maya Chen" }, "scope": "trips:write" }
   },
   "conversations": { "hello": "Hi, a question about my booking." },
   "web": { "accountPage": "/trips" }
@@ -66,8 +66,9 @@ The profile is optional; `--profile` takes precedence.
 | --- | --- | --- |
 | `siteSignIn(person)` | Returns a Cookie header for test person `"alice"` or `"bob"` signed in to your site | Direct and Device Sign-In, Account Tokens, sign-out, web browsing |
 | `connections(person)`, `disconnect(person, clientId)` | Read and change the account's connected agents | Connected-agent settings |
-| `endSession(sessionId)` | Ends a Session | Ending Sessions, cookies not outliving them |
+| `endSession(sessionId)` | Ends a Session, named by its Session Key's thumbprint | Ending Sessions, ended keys refused, cookies not outliving them |
 | `staffJoin(conversationId)`, `staffReply(conversationId, text)` | Act as a person taking a handoff | Handoff to a person |
+| `staffCallTool(conversationId, name, input)` | That person calls a tool, returning `{ kind }` | Staff held to the Session's access after sign-out |
 | `lastCode()` | Returns the last Mediated Sign-In one-time code | Mediated Sign-In codes |
 | `performed(operationId)` | The terms each run of `perform` got for an operation | Performing once, only the confirmed revision, website confirms |
 | `settle(operationId, state, summary)` | Records an outcome `perform` couldn't tell | Unknown outcomes staying `in_progress` |

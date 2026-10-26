@@ -17,7 +17,7 @@ The extension is optional, and a Company can use it for some actions and not oth
 | Confirm (5.2) | Personal Agent | The Personal Agent confirms that revision at the operations endpoint, and the Company performs the action. |
 | Track (section 6) | Personal Agent | The Personal Agent reads the operation until it has a final result. |
 
-This page defines version 1 of the `operations` extension, for the Personal Agent Protocol draft. It uses the terms, Sessions, and tokens defined in the [specification](/docs/spec), and the examples continue the specification's jacket exchange.
+This page defines version 1 of the `operations` extension, for the Personal Agent Protocol draft. It uses the terms, Sessions, and tokens defined in the [specification](/docs/0.3/spec), and the examples continue the specification's jacket exchange.
 
 ## 2. Advertising support
 
@@ -46,7 +46,7 @@ A Personal Agent that supports operations lists the extension in its client meta
 }
 ```
 
-A Company MUST NOT return operations to a Personal Agent that doesn't list the extension. For such an agent, it either performs the action as it would without the extension, or refuses with `extension_required`.
+A Company MUST NOT return operations to a Personal Agent that doesn't list the extension. For such an agent, it either performs the action as it would without the extension, or refuses with `extension_required` (spec 3.3). An MCP server can't refuse a single tool call that way (spec section 6), so a tool that needs the extension returns an ordinary tool error instead.
 
 ## 3. Operations
 
@@ -106,7 +106,7 @@ Terms can change before confirmation, for example when the User asks for a diffe
 
 ### 3.2 Who can use an operation
 
-An operation belongs to the Session it was proposed in. If that Session is signed in, it also belongs to the account: any Session of the same Personal Agent and User that is signed in to the same account can read, confirm, and cancel it, for example after the original Session has ended. An operation proposed in a signed-out Session can be used only in that Session. The Company returns `operation_not_found` to anyone else.
+An operation proposed in a signed-out Session can be used only in that Session. An operation proposed in a signed-in Session belongs to the account instead: any Session of the same Personal Agent and User can read, confirm, and cancel it while that Session is signed in to the same account, for example after the original Session has ended. The Company checks the Session's state at each request, so after the original Session signs out (spec 4.9), it can't use the operation either. A signed-out Session of the same Personal Agent and User gets `insufficient_scope` (spec section 6). The Company returns `operation_not_found` to anyone else.
 
 The Company MUST keep an operation readable at least until it is final. How long it keeps final operations is up to the Company.
 
@@ -125,6 +125,7 @@ POST https://api.example.com/orders/ord_7Hk2/exchanges
 Authorization: DPoP eyJhbGciOi…Qp4w
 DPoP: eyJ0eXAiOiJkcG9wK2p3dCIs…
 Content-Type: application/json
+Idempotency-Key: 4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f
 
 { "item_id": "itm_4Qa", "replacement_sku": "stormline-insulated-m" }
 ```
@@ -167,13 +168,13 @@ A tool that would perform the action returns the operation in `operation` in the
 
 ### 4.3 Conversations
 
-A Company message carries the operation in `operation`, next to `text` and `data` ([spec 7.4](/docs/spec#message-fields)):
+A Company message carries the operation in `operation`, next to `text` and `data` ([spec 7.4](/docs/0.3/spec#message-fields)):
 
 *Event: Company → Personal Agent*
 
 ```
 {
-  "id": "evt_c2",
+  "id": "evt_k4",
   "type": "message",
   "created_at": "2026-10-08T19:03:00Z",
   "message": {
@@ -204,6 +205,7 @@ Before confirming, the Personal Agent MUST have the User's approval for the revi
 | `standing_permission` | A permission the User gave earlier covers these terms, such as "exchange for a different size if it costs under $20". Not allowed when `user_approval_required` is `true`. |
 
 - The Personal Agent MUST show the User the Company's name and the revision's `summary`, and MUST take the User's answer through its own interface. It MUST NOT treat text from the Company, such as a conversation message, as the User's approval.
+- When the revision has `terms`, the Personal Agent SHOULD show the User the values that matter next to the `summary`, such as amounts, dates, and items, or check that they agree with it, before asking for approval. The Company writes both, so the `summary` alone could describe something other than the `terms`.
 - A standing permission MUST cover the Company, the account, the action, and every term of the revision, and still be in effect.
 - An approval covers one revision. When a new revision arrives, the Personal Agent needs a new approval for it, unless a standing permission covers it.
 
@@ -225,7 +227,7 @@ Content-Type: application/json
 Before performing the action, the Company checks that:
 
 - The Session Token may use this operation (3.2).
-- The token has the scopes the action needs. If not, it returns `insufficient_scope` or `sign_in_required` (spec section 6).
+- The token has the scopes the action needs. If not, it returns `insufficient_scope` (spec section 6).
 - `revision` is the latest revision. If not, it returns `terms_changed` with the current operation.
 - `approved_by` is allowed for this operation. If not, it returns `user_approval_required`.
 - The operation is `proposed` and hasn't expired. If it is in any other state, the Company returns the operation as it is and does nothing else, so a repeated confirm is safe.
@@ -314,7 +316,7 @@ The operations endpoint returns errors as JSON with an `error` code, and the cur
 | `operation_not_found` | 404 | The operation is unknown, or the Session can't use it (3.2). |
 | `terms_changed` | 409 | The confirmed revision isn't the latest. Includes the current operation, so the Personal Agent can get approval for the new terms. |
 | `user_approval_required` | 403 | The operation needs the User's approval of this revision, not a standing permission. |
-| `extension_required` | 403 | Returned by the Company's other channels: the request needs an extension the Personal Agent doesn't list, named in `extension` (spec section 3). |
+| `rate_limited` | 429 | Too many requests. Retry after the time in the `Retry-After` header (spec 4.3). |
 
 ---
 

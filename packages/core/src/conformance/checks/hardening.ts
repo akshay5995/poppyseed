@@ -14,7 +14,10 @@ export const hardeningChecks = [
 			const tool = t.profile("publicTool");
 			const first = await t.callTool(agent, token.access_token, tool);
 			t.ok(first.headers.get("ratelimit") && first.headers.get("ratelimit-policy"), "responses carry RateLimit and RateLimit-Policy headers");
-			for (let i = 0; i < limit + 5; i++) {
+			// Limits count per window, so a run that crosses a window boundary starts counting again.
+			// Twice the limit can cross at most one boundary, so one window always goes over.
+			const attempts = 2 * limit + 5;
+			for (let i = 0; i < attempts; i++) {
 				const response = await t.callTool(agent, token.access_token, tool);
 				if (response.status === 429) {
 					t.ok(response.headers.get("retry-after"), "429 has Retry-After");
@@ -24,7 +27,7 @@ export const hardeningChecks = [
 					return;
 				}
 			}
-			t.fail(`${limit + 6} requests in one Session were never limited`);
+			t.fail(`${attempts + 1} requests in one Session were never limited`);
 		},
 	}),
 

@@ -127,7 +127,7 @@ function describe(result: ToolResult): string {
 		case "operation":
 			return `Proposed, not done yet. The customer's agent will confirm it. Summary: ${result.operation.summary}`;
 		case "authorization":
-			return result.error === "sign_in_required" ? "The customer needs to sign in first. The request was sent." : `More access is needed (${result.scope}). The request was sent.`;
+			return `The customer needs to sign in, or grant more access (${result.scope}). The request was sent.`;
 		case "error":
 			return result.message;
 	}

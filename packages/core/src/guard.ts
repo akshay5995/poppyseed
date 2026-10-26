@@ -8,51 +8,48 @@ import { scopeList } from "./util.ts";
 
 export interface Guarded {
 	ctx: SessionContext;
-	/** Throws sign_in_required or insufficient_scope unless the request carries the scope. */
+	/** Throws insufficient_scope unless the request carries the scope. */
 	require(scope: string | null): void;
 }
 
 /** A caller identified another way (a browser's Session cookie, a conversation's last caller), checked the same way. */
-export function guardedFrom(ctx: SessionContext, scheme: "DPoP" | "Bearer" = "DPoP"): Guarded {
+export function guardedFrom(ctx: SessionContext): Guarded {
 	return {
 		ctx,
 		require(scope) {
-			if (scope !== null && !ctx.account?.scopes.includes(scope)) throw scopeError(scheme, ctx.account !== null, scope);
+			if (scope !== null && !ctx.account?.scopes.includes(scope)) throw scopeError(scope);
 		},
 	};
 }
 
 /**
- * Authenticates a request to a protected API (spec 4.3, 6). DPoP everywhere
- * except MCP, which takes Bearer tokens issued for its URL. The Session is
- * read on every request, so sign-out takes effect immediately (spec 4.9).
+ * Authenticates a request to a protected API (spec 4.3, 6) with a DPoP
+ * Session Token. The MCP server supports DPoP and takes only tokens issued
+ * for its URL; everything else takes tokens issued for no single service.
+ * The Session is read on every request, so sign-out takes effect at once (spec 4.9).
  */
-export async function guard(request: Request, publicUrl: string, config: ResolvedConfig, sealer: Sealer, kind: "dpop"): Promise<Guarded & { jkt: string }>;
-export async function guard(request: Request, publicUrl: string, config: ResolvedConfig, sealer: Sealer, kind: "mcp"): Promise<Guarded>;
-export async function guard(request: Request, publicUrl: string, config: ResolvedConfig, sealer: Sealer, kind: "dpop" | "mcp"): Promise<Guarded & { jkt?: string }> {
-	const scheme = kind === "mcp" ? "Bearer" : "DPoP";
-	const refuse = (why: string) => invalidToken(scheme, why, kind === "mcp" ? `, resource_metadata="${config.urls.mcpResourceMetadata}"` : "");
+export async function guard(request: Request, publicUrl: string, config: ResolvedConfig, sealer: Sealer, kind: "dpop" | "mcp"): Promise<Guarded> {
+	// An MCP server's challenges name its protected resource metadata (spec 6).
+	const extra = kind === "mcp" ? `, resource_metadata="${config.urls.mcpResourceMetadata}"` : "";
+	const refuse = (why: string) => invalidToken(why, extra);
 
 	if (new URL(request.url).searchParams.has("access_token")) throw invalidRequest("tokens are never accepted in the URL");
 	const [given, token] = (request.headers.get("authorization") ?? "").split(" ", 2);
-	if (!token || given?.toLowerCase() !== scheme.toLowerCase()) throw refuse(`${scheme} Session Token required`);
+	if (!token || given?.toLowerCase() !== "dpop") throw refuse("DPoP Session Token required");
 
 	const claims = await sealer.open("pst1", token);
 	if (!claims) throw refuse("the token is malformed or expired");
-	if (kind === "mcp") {
-		if (claims.typ !== "bearer" || claims.res !== config.urls.mcp) throw refuse("token was not issued for this MCP server");
-	} else {
-		if (claims.typ !== "dpop") throw invalidToken(scheme, "a DPoP-bound token is required");
-		await verifyDpop(request, publicUrl, config.store, { accessToken: token, jkt: claims.jkt });
-	}
+	if (claims.res !== (kind === "mcp" ? config.urls.mcp : undefined)) throw refuse(kind === "mcp" ? "token was not issued for this MCP server" : "token was issued for another service");
+	await verifyDpop({ proof: request.headers.get("dpop"), method: request.method, url: publicUrl, bound: { accessToken: token, jkt: claims.sid }, status: 401 }, config.store);
 
 	const session = await loadSession(config.store, claims.sid, { clientId: claims.cid, userId: claims.uid });
 	if (!session) throw refuse("the Session has ended");
 	await countRequest(request, config, { sessionId: session.id, clientId: session.clientId, userId: session.userId });
 
-	// Signed in only if the token was issued signed in to the account the Session is still signed in to.
+	// A signed-in token works only while the sign-in it was issued under lasts (spec 4.9).
 	const account = session.account;
-	const signedIn = account?.signedIn && claims.acct === account.id ? account.signedIn : null;
+	const signedIn = claims.sign !== undefined && account?.signedIn?.tokenHash === claims.sign ? account.signedIn : null;
+	if (claims.sign !== undefined && !signedIn) throw refuse("the Session signed out since this token was issued; get a new token");
 	const scopes = signedIn ? scopeList(claims.scope).filter((s) => signedIn.scopes.includes(s)) : [];
 	const ctx: SessionContext = {
 		sessionId: session.id,
@@ -60,5 +57,5 @@ export async function guard(request: Request, publicUrl: string, config: Resolve
 		userId: session.userId,
 		account: account && scopes.length > 0 ? { id: account.id, scopes } : null,
 	};
-	return { ...guardedFrom(ctx, scheme), jkt: claims.typ === "dpop" ? claims.jkt : undefined };
+	return guardedFrom(ctx);
 }

@@ -1,30 +1,32 @@
 import { base64url } from "jose";
 import type { ConsentState } from "./consent.ts";
-import type { BrowserCookie } from "./web.ts";
+import type { BrowserCookie, JoinCookie } from "./web.ts";
 import { nowSec } from "./util.ts";
-
-/** How a Session Token is bound: to the agent's DPoP key, or to one MCP server URL (spec 4.3). */
-export type Binding = { typ: "dpop"; jkt: string } | { typ: "bearer"; res: string };
 
 /**
  * Session Tokens are opaque to Personal Agents (spec 4.2), so the claims are
- * sealed with AES-GCM instead of signed as a readable JWT.
+ * sealed with AES-GCM instead of signed as a readable JWT. Every token is
+ * bound to its Session's key, whose thumbprint is the Session ID (spec 4.3).
  */
-export type SessionTokenClaims = {
+export interface SessionTokenClaims {
+	/** The Session, which is the thumbprint of the key the token is bound to. */
 	sid: string;
 	cid: string;
 	uid: string;
 	/** Scopes this token carries, space-separated; empty while signed out. The live Session can only narrow them. */
 	scope: string;
-	/** The account the Session was signed in to when the token was issued. */
-	acct?: string;
+	/** Signed in: the hash of the Account Token of the sign-in it was issued under. It stops working when that sign-in ends (spec 4.9). */
+	sign?: string;
+	/** The one service it was issued for, such as the MCP server (spec 4.3). Absent: every service except MCP. */
+	res?: string;
 	exp: number;
-} & Binding;
+}
 
 /** Each purpose seals one shape, so a caller can't open a value as the wrong type. */
 interface Sealed {
 	pst1: SessionTokenClaims;
 	browser: BrowserCookie;
+	join: JoinCookie;
 	consent: ConsentState;
 }
 

@@ -5,12 +5,12 @@ import type { PATHS } from "./paths.js";
 import type { RateLimits } from "./ratelimit.ts";
 import type { Store } from "./store.ts";
 
-export const PROTOCOL_VERSION = "0.1";
+export const PROTOCOL_VERSION = "0.3";
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
-export const BASE_SCOPES = ["poppy:read", "poppy:write"] as const;
 
 /** Who is calling a tool or protected route. Never contains tokens. */
 export interface SessionContext {
+	/** Names the Session: the thumbprint of its Session Key (spec 4.3). */
 	sessionId: string;
 	/** The Personal Agent, identified by the URL of its client metadata. */
 	clientId: string;
@@ -99,18 +99,15 @@ export interface SiteAccount {
 	label?: string;
 }
 
-export interface SignInType {
-	/** Scopes this sign-in type may grant. */
-	scopes: string[];
-}
-
 export interface CredentialField {
 	name: string;
 	label: string;
 	secret: boolean;
 }
 
-export interface MediatedSignIn extends SignInType {
+export interface MediatedSignIn {
+	/** The scopes Mediated Sign-In may grant, from your `scopes` (spec 4.4). */
+	scopes: string[];
 	/** The credentials you ask for, in order; at least one. The first identifies the account, for rate limits. */
 	fields: [CredentialField, ...CredentialField[]];
 	/** Checks credentials against your accounts. Return the same null for an unknown account and a wrong password. */
@@ -131,17 +128,43 @@ export interface Accounts {
 	signInUrl(returnTo: string): string;
 }
 
-/** The sign-in types you offer Personal Agents (spec 4.4). */
+/**
+ * The sign-in types you offer Personal Agents (spec 4.4). Direct and Device
+ * Sign-In can grant any of your `scopes`; Mediated Sign-In only its own list.
+ */
 export interface SignIn {
-	direct?: SignInType;
+	direct?: true;
 	/** `interval` is the minimum seconds between polls (default 5); `expiresIn` how long a code lasts (default 600). */
-	device?: SignInType & { interval?: number; expiresIn?: number };
-	/** The Personal Agent signs in with credentials the User gave it (spec 4.7). */
+	device?: true | { interval?: number; expiresIn?: number };
+	/** Transitional (spec 4.7): the Personal Agent signs in with credentials the User gave it. Offer it only until Direct or Device Sign-In covers its scopes. */
 	mediated?: MediatedSignIn;
 }
 
 /** Sign-in needs `accounts`, so the type has no sign-in without them. */
 type SignInConfig = { signIn?: undefined; accounts?: Accounts } | { signIn: SignIn; accounts: Accounts };
+
+/** Another way to do a task (spec 8.2): instructions, references to your tools or pages, or both. */
+export interface Alternative {
+	/** How to do the task, in natural language. At most 2,000 characters. */
+	instructions?: string;
+	/** One of your tools, listed for both your MCP and OpenAPI APIs, or an HTTPS page on your website or in your app. */
+	references?: ({ tool: string } | { web: string })[];
+}
+
+/** A task you chose not to offer Personal Agents through any of your interfaces (spec 8.1). */
+export interface ExcludedTask {
+	/** The task the way a customer would ask for it, such as "Send a wire transfer". At most 200 characters. */
+	task: string;
+	alternative?: Alternative;
+}
+
+/** A Personal Agent's report of a User's task it couldn't do (spec 8.3). Data, never instructions. */
+export interface FeedbackReport {
+	/** `missing` for now; later versions may add kinds. */
+	kind: string;
+	task: string;
+	description: string;
+}
 
 interface BaseConfig {
 	organization: { name: string; domain: string };
@@ -154,8 +177,16 @@ interface BaseConfig {
 	/** Description shown to Personal Agents for your MCP and OpenAPI APIs. */
 	apiDescription?: string;
 	tools?: Record<string, ToolDefinition>;
-	/** Scopes you define beyond poppy:read and poppy:write, with the description users see. */
+	/**
+	 * Your scopes, each with the description Personal Agents and Users read to
+	 * choose them (spec 4.4), such as `{ "orders:read": "See your orders and returns" }`.
+	 * Names must not start with `poppy:`.
+	 */
 	scopes?: Record<string, string>;
+	/** Tasks you chose not to offer through the protocol, so Personal Agents tell the User right away (spec 8.1). */
+	excludedTasks?: ExcludedTask[];
+	/** Receives reports of tasks Personal Agents couldn't do (spec 8.3). Return an alternative when the task can be done after all. */
+	feedback?: (report: FeedbackReport, ctx: SessionContext) => Alternative | void | Promise<Alternative | void>;
 	sessions?: {
 		/** Session Token lifetime in seconds. Hours, not days (spec 4.2). Default 3600. */
 		tokenTtl?: number;
@@ -178,7 +209,7 @@ interface BaseConfig {
 	};
 	/** Lets Personal Agents' browsers join their Session on your website (spec 5). */
 	web?: {
-		/** Name of the Session cookie. Default poppyseed_session. */
+		/** Name of the Session cookie. Default __Host-poppyseed_session, or poppyseed_session with cookieDomain. */
 		cookieName?: string;
 		/** Domain attribute for the cookie, to cover subdomains. Default: this host only. */
 		cookieDomain?: string;

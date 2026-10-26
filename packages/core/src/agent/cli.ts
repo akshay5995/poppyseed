@@ -34,15 +34,15 @@ export async function agent(args: string[]): Promise<number> {
 		step(`discovered ${discovery.poppy.organization.name}`, discovery.poppy);
 
 		const session = await me.startSession();
-		step("signed-out DPoP session", { session_id: session.session_id, token_type: session.token_type, signed_in: session.signed_in, expires_in: session.expires_in });
+		step("signed-out DPoP session", { session_key: session.session.jkt, token_type: session.token_type, expires_in: session.expires_in });
 
 		const mcp = me.endpoints.mcp;
 		if (!mcp) {
 			step("no MCP API published");
 			return 0;
 		}
-		const bearer = await me.startSession({ resource: mcp, sessionId: session.session_id });
-		step("MCP Bearer token for the same session", { token_type: bearer.token_type, session_id: bearer.session_id });
+		const bearer = await me.startSession({ resource: mcp, session: session.session });
+		step("MCP token for the same session", { token_type: bearer.token_type, session_key: bearer.session.jkt });
 		await me.mcpInitialize(mcp, bearer.access_token);
 		const { tools } = await me.mcp<{ tools: { name: string; description: string }[] }>(mcp, bearer.access_token, "tools/list");
 		step("tools", tools.map((t) => `${t.name}: ${t.description}`).join("\n"));

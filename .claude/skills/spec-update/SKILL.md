@@ -20,7 +20,7 @@ git merge origin/spec-snapshot                          # or: git checkout origi
 
 No snapshot yet (a change you were told about)? Run the workflow: `workflow_dispatch` on `.github/workflows/spec-snapshot.yml`. If this environment can't reach the site, ask for the workflow run, don't copy text from elsewhere.
 
-`pnpm spec:check` now fails with "spec/source changed since spec/pap-0.1 was reconciled". That is expected until step 3.
+`pnpm spec:check` now fails with "spec/source changed since spec/pap-<version> was reconciled". That is expected until step 3.
 
 ## 2. Classify each hunk
 
@@ -32,12 +32,12 @@ For every changed paragraph in `spec/source/docs/{spec,extensions,guides}.md`, d
 | New rule | Add a line with a new ID (`area.slug`, never reused) | yes |
 | Changed rule | Edit the text, keep the ID if it's the same duty | yes |
 | Removed rule | Delete the line; delete or retarget checks and mutants that cover it | maybe |
-| New protocol version (`0.2`) | Copy `spec/pap-0.1/` to `spec/pap-0.2/`, edit the copy, bump `SPEC_VERSION` in `packages/core/scripts/spec.ts` and `PROTOCOL_VERSION` in `packages/core/src/types.ts` | yes |
+| New protocol version (`0.4`) | Move `spec/pap-0.3/` to `spec/pap-0.4/` with `git mv`, edit it, bump `SPEC_VERSION` in `packages/core/scripts/spec.ts` and `PROTOCOL_VERSION` in `packages/core/src/types.ts` | yes |
 
 Find what a rule touches before changing it:
 
 ```sh
-grep -rn '`dpop.verify`' spec/pap-0.1             # the requirement line
+grep -rn '`dpop.verify`' spec/pap-0.3             # the requirement line
 grep -rn '"dpop.verify"' packages/core/src/conformance  # checks (covers) and plan entries
 ```
 
@@ -46,7 +46,7 @@ grep -rn '"dpop.verify"' packages/core/src/conformance  # checks (covers) and pl
 Shape (spec:check rejects anything else): ``- **MUST** · company · `area.slug` — One plain sentence.`` Put it under the heading of its official section (`## 4.3 …`, `## ops.5.2 …`, `## guides.<topic>`). Add `*(implied)*` when the official text states it as behaviour without a BCP 14 keyword. Then:
 
 ```sh
-pnpm spec:reconciled   # records that spec/pap-0.1 matches this snapshot
+pnpm spec:reconciled   # records that spec/pap-<version> matches this snapshot
 pnpm spec:build        # regenerates requirements.generated.ts and spec/STATUS.md
 pnpm spec:check        # lists every company rule with no check and no plan entry
 ```

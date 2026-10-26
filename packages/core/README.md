@@ -101,7 +101,8 @@ const response = (await poppyseed.handle(request)) ?? new Response("Not found", 
 | `POST /mcp`, `GET /.well-known/oauth-protected-resource/mcp`, `GET /poppy/openapi.json`, `POST /poppy/tools/:name` | APIs (§6) |
 | `GET /poppy/operations/:id`, `POST …/confirm`, `POST …/cancel` | Operations extension |
 | `POST /poppy/conversations`, `POST …/:id/messages|handoff|close`, `GET …/:id/events` | Conversations (§7) |
-| `POST /poppy/browser-session` | Web browsing (§5) |
+| `GET/POST /poppy/browser-session` | Web browsing (§5) |
+| `GET /poppy/excluded-tasks.json`, `POST /poppy/feedback` | Tasks a company doesn't offer (§8) |
 
 `poppyseed.urls` gives the public URL of each, and `ROUTES` from `poppyseed/paths` lists them for framework rewrites.
 

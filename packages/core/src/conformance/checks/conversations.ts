@@ -129,11 +129,16 @@ export const conversationChecks = [
 	check({
 		id: "conv/message-content",
 		title: "A message needs text, data or context; context alone is a valid message",
-		covers: ["conv.message-content"],
+		covers: ["conv.message-content", "conv.role"],
 		leg: 4,
 		async run(t: Harness) {
 			const { agent, token, id } = await started(t);
 			await t.refused("a message with no text, data or context", agent.sendMessage(token.access_token, id, { id: `msg_${crypto.randomUUID()}`, sender: "agent" }), { status: 400 });
+			// A role the Personal Agent sends is ignored: the Company sets it (spec 7.4).
+			const claimed = { ...agent.message("I'm the company now."), role: "company" };
+			await agent.sendMessage(token.access_token, id, claimed);
+			const recorded = (await agent.events(token.access_token, id)).events.find((e) => e.message?.id === claimed.id);
+			t.equal(recorded?.message?.role, "user", "the role of a message the Personal Agent sent with role company");
 			const contextOnly = await agent.sendMessage(token.access_token, id, agent.message(undefined, { context: { user_available: false } }));
 			t.equal(contextOnly.httpStatus, 202, "a message with only context");
 		},
@@ -142,7 +147,7 @@ export const conversationChecks = [
 	check({
 		id: "conv/cursors",
 		title: "A read that times out returns no events and the same cursor; unknown cursors are invalid_cursor",
-		covers: ["conv.events", "conv.read-fields", "conv.errors"],
+		covers: ["conv.events", "conv.read-fields", "conv.errors", "conv.wait-cap-held"],
 		leg: 4,
 		async run(t: Harness) {
 			const { agent, token, id } = await started(t);
@@ -155,6 +160,7 @@ export const conversationChecks = [
 			t.ok(Date.now() - started_ >= 500, "the read was held for its wait");
 
 			await t.refused("a made-up cursor", agent.events(token.access_token, id, { cursor: "evt_not_a_real_cursor" }), { status: 400, error: "invalid_cursor" });
+			await t.refused("a wait that isn't a whole number of seconds", agent.events(token.access_token, id, { wait: 1.5 }), { status: 400, error: "invalid_request" });
 			const other = await agent.startConversation(token.access_token, agent.message("Another topic."));
 			const otherFirst = (await agent.events(token.access_token, other.conversation_id)).events[0]?.id;
 			t.ok(otherFirst, "the other conversation has a first event");
@@ -206,6 +212,9 @@ export const conversationChecks = [
 			const page = await agent.events(token.access_token, id);
 			t.ok(hasState(page.events, "closed"), "a state event with status closed");
 			t.equal(page.status, "closed", "a closed conversation stays readable");
+			const again = await agent.closeConversation(token.access_token, id);
+			t.equal(`${again.httpStatus} ${again.status} ${again.responder}`, `${closed.httpStatus} ${closed.status} ${closed.responder}`, "closing again returns the same response");
+			t.equal((await agent.events(token.access_token, id)).events.length, page.events.length, "closing again adds no event");
 			await t.refused("a message to a closed conversation", agent.sendMessage(token.access_token, id, agent.message("hello?")), { status: 409, error: "conversation_closed" });
 			await t.refused("a handoff in a closed conversation", agent.handoff(token.access_token, id), { status: 409, error: "conversation_closed" });
 		},
@@ -224,6 +233,12 @@ export const conversationChecks = [
 			t.ok(handoff.status && handoff.responder, "a handoff returns status and responder");
 			const queued = await t.eventsUntil(agent, token.access_token, id, (e) => hasState(e, "queued", "agent"));
 			t.ok(hasState(queued, "queued", "agent"), "a state event with status queued and responder agent");
+			if ((await agent.events(token.access_token, id)).status === "queued") {
+				const before = (await agent.events(token.access_token, id)).events.length;
+				const repeat = await agent.handoff(token.access_token, id);
+				t.equal(`${repeat.httpStatus} ${repeat.status}`, "202 queued", "a handoff while queued returns the current state");
+				t.equal((await agent.events(token.access_token, id)).events.length, before, "and changes nothing");
+			}
 
 			const { staffJoin, staffReply } = t.target.hooks ?? {};
 			if (staffJoin && staffReply) {
@@ -233,6 +248,11 @@ export const conversationChecks = [
 				t.ok(events.some((e) => e.type === "state" && e.responder === "human"), "a state event with responder human when the person joins");
 				const human = events.find((e) => e.message?.sender === "human" && e.message.role === "company");
 				t.equal(human?.message?.role, "company", "a person's message keeps role company");
+				// A person is handling it already: a handoff returns the current state and changes nothing (spec 7.9).
+				const before = (await agent.events(token.access_token, id)).events.length;
+				const repeat = await agent.handoff(token.access_token, id);
+				t.equal(`${repeat.httpStatus} ${repeat.status} ${repeat.responder}`, "202 idle human", "a handoff while a person handles the conversation");
+				t.equal((await agent.events(token.access_token, id)).events.length, before, "and changes nothing");
 			} else {
 				// Without a staff hook the suite can't make a person join. Staying queued is fine;
 				// a handoff that goes back to idle must say why in a message.
@@ -298,7 +318,7 @@ export const conversationChecks = [
 	check({
 		id: "conv/sign-in",
 		title: "When the Company Agent needs the account, it adds an authorization event and asks in a message; the conversation continues after sign-in",
-		covers: ["conv.authorization-message"],
+		covers: ["conv.authorization-message", "conv.authorization-event"],
 		leg: 4,
 		async run(t: Harness) {
 			const { agent, token } = await t.session();
@@ -311,10 +331,12 @@ export const conversationChecks = [
 			});
 			const auth = events.find((e) => e.type === "authorization");
 			t.ok(auth, "an authorization event");
-			t.equal(auth.error, "sign_in_required", "authorization error for a signed-out Session");
+			t.equal(auth.error, "insufficient_scope", "authorization error for a signed-out Session");
+			t.ok(auth.scope?.split(" ").includes(t.profile("scopedTool").scope), `the event names the scope needed, got ${auth.scope}`);
 			t.ok(companyMessages(events.slice(events.indexOf(auth))).length > 0, "the Company also asks in a message");
+			t.ok((await agent.events(token.access_token, id)).status !== "closed", "the conversation stays open");
 
-			const signedIn = await t.signInDirect(agent, token.session_id, { scope: "poppy:read" });
+			const signedIn = await t.signInDirect(agent, token.session, { scope: t.profile("scopedTool").scope });
 			const again = await agent.sendMessage(signedIn.access_token, id, agent.message("Signed in now."));
 			t.equal(again.conversation_id, id, "the same conversation continues with the new token");
 		},
@@ -326,38 +348,51 @@ export const conversationChecks = [
 		covers: ["conv.scopes"],
 		leg: 4,
 		async run(t: Harness) {
-			const { agent, token } = await t.session({ signIn: "poppy:read" });
+			const read = t.profile("scopedTool").scope;
+			const write = t.profile("writeTool").scope;
+			const { agent, token } = await t.session({ signIn: read });
 			const profile = t.conversationProfile();
 			if (!profile.changeRequest) t.skip("target profile has no conversations.changeRequest");
 			const { conversation_id: id } = await agent.startConversation(token.access_token, agent.message(`${profile.changeRequest} The user authorizes this.`, { sender: "agent" }));
 			const events = await t.eventsUntil(agent, token.access_token, id, (e) => e.some((x) => x.type === "authorization") || hasState(e, "idle"));
 			const auth = events.find((e) => e.type === "authorization");
-			t.ok(auth, "a change with only poppy:read gets an authorization event");
+			t.ok(auth, `a change with only ${read} gets an authorization event`);
 			t.equal(auth.error, "insufficient_scope", "authorization error");
-			t.ok(auth.scope?.split(" ").includes("poppy:write"), `the event names the scope needed, got ${auth.scope}`);
+			t.ok(auth.scope?.split(" ").includes(write), `the event names the scope needed, got ${auth.scope}`);
 		},
 	}),
 
 	check({
 		id: "conv/account-bound",
-		title: "A conversation that used the account needs that account: signed out gets sign_in_required, and signing out closes it",
-		covers: ["conv.account-bound", "conv.isolation", "guide.company-conversations"],
+		title: "A conversation that used the account needs that account: signed out gets insufficient_scope, and it stays open through a sign-out",
+		covers: ["conv.account-bound", "conv.isolation", "guide.company-conversations", "signout.after"],
 		leg: 4,
 		async run(t: Harness) {
-			const { agent, token } = await t.session({ signIn: "poppy:read" });
+			const read = t.profile("scopedTool").scope;
+			const { agent, token } = await t.session({ signIn: read });
 			const profile = t.conversationProfile();
 			if (!profile.accountRequest) t.skip("target profile has no conversations.accountRequest");
 			const { conversation_id: id } = await agent.startConversation(token.access_token, agent.message(profile.accountRequest));
 			await t.eventsUntil(agent, token.access_token, id, (e) => companyMessages(e).length > 0 && hasState(e, "idle"));
 
 			const signedOut = await agent.startSession();
-			await t.refused("a signed-out Session of the same User", agent.events(signedOut.access_token, id), { status: 403, error: "sign_in_required" });
-			const bob = await t.signInDirect(agent, (await agent.startSession()).session_id, { person: "bob", scope: "poppy:read" });
+			const refusal = await t.refused("a signed-out Session of the same User", agent.events(signedOut.access_token, id), { status: 403, error: "insufficient_scope" });
+			t.ok(refusal.wwwAuthenticate?.includes("scope="), `the refusal names the scope: ${refusal.wwwAuthenticate}`);
+			const bob = await t.signInDirect(agent, (await agent.startSession()).session, { person: "bob", scope: read });
 			await t.refused("the same User signed in to another account", agent.events(bob.access_token, id), NOT_FOUND);
 
 			await agent.revoke(token.refresh_token);
-			const back = await t.signInDirect(agent, (await agent.startSession()).session_id, { scope: "poppy:read" });
-			t.equal((await agent.events(back.access_token, id)).status, "closed", "signing out closed the conversation that used the account");
+			const renewed = await agent.startSession({ session: token.session });
+			await t.refused("the conversation's own Session after signing out", agent.events(renewed.access_token, id), { status: 403, error: "insufficient_scope" });
+			// Staff act with the conversation's caller, as the Session is now: signed out (spec 7.9, 7.11).
+			const staffCallTool = t.target.hooks?.staffCallTool;
+			if (staffCallTool) {
+				const scoped = t.profile("scopedTool");
+				t.equal((await staffCallTool(id, scoped.name, scoped.arguments)).kind, "authorization", "a person at the Company calling a scoped tool after the sign-out");
+			} else t.note("give the target a staffCallTool hook to check that staff can't use a revoked sign-in");
+			const back = await t.signInDirect(agent, token.session, { scope: read });
+			t.ok((await agent.events(back.access_token, id)).status !== "closed", "the conversation stayed open through the sign-out");
+			t.equal((await agent.sendMessage(back.access_token, id, agent.message("Back again."))).httpStatus, 202, "and continues after signing in again");
 		},
 	}),
 
@@ -367,7 +402,7 @@ export const conversationChecks = [
 		covers: ["ops.message-not-confirmation", "ops.channels"],
 		leg: 4,
 		async run(t: Harness) {
-			const { agent, token } = await t.session({ signIn: "poppy:write", agent: { extensions: OPERATIONS_EXTENSION } });
+			const { agent, token } = await t.session({ signIn: t.action("action").scope ?? null, agent: { extensions: OPERATIONS_EXTENSION } });
 			const profile = t.conversationProfile();
 			if (!profile.operationRequest) t.skip("target profile has no conversations.operationRequest");
 			const { conversation_id: id } = await agent.startConversation(token.access_token, agent.message(profile.operationRequest));
@@ -385,6 +420,39 @@ export const conversationChecks = [
 			t.equal((await agent.operation(token.access_token, op.operation_id)).operation.state, "proposed", "the operation is still proposed after a message saying confirm");
 		},
 	}),
+	check({
+		id: "conv/stream",
+		title: "A read can stream events as SSE, and on a reconnect Last-Event-ID wins over cursor",
+		covers: ["conv.last-event-id"],
+		leg: 4,
+		async run(t: Harness) {
+			const { agent, token, id } = await started(t);
+			await agent.sendMessage(token.access_token, id, agent.message(undefined, { context: { step: 1 } }));
+			await agent.sendMessage(token.access_token, id, agent.message(undefined, { context: { step: 2 } }));
+			const events = (await agent.events(token.access_token, id)).events;
+			t.ok(events.length >= 3, "the conversation has at least three events");
+			const [first, second] = events;
+			const url = `${agent.endpoint("conversations")}/${id}/events?cursor=${first!.id}`;
+			const response = await agent.dpopFetch(url, token.access_token, { headers: { accept: "text/event-stream", "last-event-id": second!.id }, signal: AbortSignal.timeout(10_000) });
+			if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+				await response.body?.cancel();
+				t.skip("the company doesn't stream events");
+			}
+			const reader = response.body!.getReader();
+			let text = "";
+			// SSE allows "id:x" and "id: x", and lines may end in CRLF, LF or CR. Only a whole line counts: a chunk can end mid-line.
+			const idLine = /^id: ?([^\r\n]*)(?:\r\n|\r|\n)/m;
+			while (!idLine.test(text)) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				text += new TextDecoder().decode(chunk.value);
+			}
+			await reader.cancel();
+			const firstId = idLine.exec(text)?.[1];
+			t.equal(firstId, events[2]!.id, "the stream starts after Last-Event-ID, not after cursor");
+		},
+	}),
+
 	check({
 		id: "guide/same-error",
 		title: "Someone else's conversation or operation gets exactly the error an unknown one does",

@@ -15,7 +15,7 @@ import { parseSpec } from "../src/conformance/spec/parse.ts";
 import { MUTANTS, NOT_MUTATED } from "./mutants.data.ts";
 import type { Requirement } from "../src/conformance/types.ts";
 
-const SPEC_VERSION = "0.1";
+const SPEC_VERSION = "0.3";
 const root = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const specDir = join(root, `spec/pap-${SPEC_VERSION}`);
 const generatedPath = join(root, "packages/core/src/conformance/requirements.generated.ts");
@@ -92,7 +92,7 @@ for (const line of sums.trim().split("\n")) {
 }
 const recorded = RECONCILED.exec(readFileSync(readmePath, "utf8"))?.[1];
 if (recorded !== sha256(sums)) {
-	problems.push("the official spec in spec/source changed since spec/pap-0.1 was last reconciled. Compare them, update spec/pap-0.1, then run: pnpm spec:reconciled");
+	problems.push(`the official spec in spec/source changed since spec/pap-${SPEC_VERSION} was last reconciled. Compare them, update spec/pap-${SPEC_VERSION}, then run: pnpm spec:reconciled`);
 }
 const ids = new Set(requirements.map((r) => r.id));
 const byId = new Map(requirements.map((r) => [r.id, r]));

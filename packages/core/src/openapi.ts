@@ -36,7 +36,7 @@ export function openApiDocument(config: ResolvedConfig, tools: Tools): Record<st
 	const paths: Record<string, unknown> = {};
 	for (const tool of tools.list) {
 		const name = tool.name;
-		const access = tool.scope ? `Requires a Session signed in with the \`${tool.scope}\` scope.` : "Works for any Session, signed in or not.";
+		const access = tool.scope ? `Requires a Session signed in with the \`${tool.scope}\` scope: ${config.scopes[tool.scope] ?? tool.scope}.` : "Works for any Session, signed in or not.";
 		const proposes = tool.proposesOperation
 			? " Returns an operation (operations extension) with HTTP 202: nothing happens until it is confirmed at the operations endpoint."
 			: "";
@@ -56,12 +56,12 @@ export function openApiDocument(config: ResolvedConfig, tools: Tools): Record<st
 									description: "The proposed operation",
 									content: { "application/json": { schema: { type: "object", required: ["operation"], properties: { operation: { $ref: "#/components/schemas/Operation" } } } } },
 								},
-								"403": { description: "sign_in_required or insufficient_scope in WWW-Authenticate, or extension_required for agents without the operations extension" },
+								"403": { description: "insufficient_scope, or extension_required for agents without the operations extension, in WWW-Authenticate" },
 							}
-						: { "403": { description: "sign_in_required or insufficient_scope, in WWW-Authenticate" } }),
+						: { "403": { description: "insufficient_scope, in WWW-Authenticate" } }),
 					"200": { description: "The tool's result", content: { "application/json": { schema: {} } } },
 					"400": { description: "The input is invalid", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
-					"401": { description: "invalid_token or invalid_dpop_proof, in WWW-Authenticate" },
+					"401": { description: "invalid_token, invalid_dpop_proof or use_dpop_nonce, in WWW-Authenticate" },
 					"422": { description: "The tool could not do it; error_description says why", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
 				},
 			},
@@ -158,7 +158,9 @@ export async function toolCallEndpoint(request: Request, store: Store, tools: To
 	};
 	const key = request.headers.get("idempotency-key");
 	const outcome = key ? await idempotent(store, `idempotency:${auth.ctx.sessionId}:${name}:${key}`, await secretHash(raw), call) : await call();
-	return json(outcome.body, outcome.status, { "cache-control": "no-store" });
+	// At APIs, extension_required goes in WWW-Authenticate like the other token errors (spec 3.3).
+	const refused = (outcome.body as { error?: unknown } | null)?.error === "extension_required";
+	return json(outcome.body, outcome.status, { "cache-control": "no-store", ...(refused ? { "www-authenticate": 'DPoP error="extension_required", extension="operations"' } : {}) });
 }
 
 interface IdempotencyRecord {

@@ -10,7 +10,7 @@
   "scopedTool": {
     "name": "my_trips",
     "arguments": {},
-    "scope": "poppy:read"
+    "scope": "trips:read"
   },
   "conversations": {
     "hello": "Hi, I have a question about flights to Lisbon.",

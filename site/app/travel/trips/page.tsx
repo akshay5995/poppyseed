@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 /** Trips, for the site login or for a Personal Agent's browser joined to its Session. */
 export default async function Trips() {
 	const { traveler, via, scopes } = await viewer();
-	const canRead = traveler && scopes.includes("poppy:read");
+	const canRead = traveler && scopes.includes("trips:read");
 	return (
 		<main>
 			<header className="hero">

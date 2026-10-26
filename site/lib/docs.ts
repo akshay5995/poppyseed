@@ -37,7 +37,7 @@ export const GROUPS: { title: string; pages: Page[] }[] = [
 		title: "Reference",
 		pages: [
 			{ kind: "doc", slug: "configuration", title: "Configuration", blurb: "Every option of definePoppyseed, and what it returns." },
-			{ kind: "link", slug: "spec", href: "https://personalagentprotocol.org/docs/spec", title: "The official spec", blurb: "The Personal Agent Protocol 0.1, at personalagentprotocol.org." },
+			{ kind: "link", slug: "spec", href: "https://personalagentprotocol.org/docs/spec", title: "The official spec", blurb: "The Personal Agent Protocol draft 0.3, at personalagentprotocol.org." },
 			{ kind: "link", slug: "coverage", href: `${REPO}/blob/master/spec/STATUS.md`, title: "Spec coverage", blurb: "Every rule of the spec and the check that verifies it in Poppyseed." },
 		],
 	},

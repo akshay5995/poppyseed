@@ -1,4 +1,4 @@
-import { createLocalJWKSet, decodeJwt, decodeProtectedHeader, jwtVerify, type JSONWebKeySet, type JWTPayload } from "jose";
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JSONWebKeySet, type JWTPayload } from "jose";
 import { invalidClient, invalidGrant, PoppyError } from "./errors.ts";
 import { claimOnce } from "./records.ts";
 import type { ResolvedConfig } from "./types.ts";
@@ -26,9 +26,9 @@ const REFETCH_MIN_MS = 30_000;
 const MAX_CLIENTS = 1_000;
 const MAX_BYTES = 100_000;
 const ALGS = ["ES256", "RS256"];
+/** Longest an assertion may live: `exp` at most five minutes after `iat` (spec 4.2). */
+const MAX_LIFETIME_SEC = 300;
 export const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
-/** The JWT `typ` of a browser assertion (spec 5). Only the browser session endpoint accepts it. */
-export const BROWSER_ASSERTION_TYP = "poppy-browser+jwt";
 
 /**
  * Loads and verifies personal agents. A client_id is an HTTPS URL that serves
@@ -76,14 +76,10 @@ export class ClientRegistry {
 
 	/**
 	 * Verifies a JWT the agent signed: a client assertion (sub = client_id) or a
-	 * session assertion (sub = the user id). Every jti is accepted once.
+	 * session assertion (sub = the user id). Both name this Company's issuer as
+	 * `aud`, never an endpoint (spec 4.1, 9.4). Every jti is accepted once.
 	 */
-	async verifyAssertion(
-		token: string,
-		clientId: string,
-		audience: string,
-		kind: "client" | "user" | "browser",
-	): Promise<JWTPayload & { sub: string; jti: string }> {
+	async verifyAssertion(token: string, clientId: string, kind: "client" | "user"): Promise<JWTPayload & { sub: string; jti: string }> {
 		const fail = (why: string) => (kind === "client" ? invalidClient(why) : invalidGrant(why));
 		let header;
 		try {
@@ -92,52 +88,37 @@ export class ClientRegistry {
 			throw fail("malformed assertion");
 		}
 		if (header.jwk || header.jku || header.x5u) throw fail("assertion must not carry its own key: sign it with a key published at your jwks_uri, and keep your DPoP key separate");
-		// A browser assertion only joins a browser; nothing else is accepted where one is expected (spec 5).
-		if ((header.typ === BROWSER_ASSERTION_TYP) !== (kind === "browser")) throw fail(`assertion typ must ${kind === "browser" ? "" : "not "}be ${BROWSER_ASSERTION_TYP}`);
 
 		// One retry with refetched keys, in case the agent rotated them since we cached them.
 		const verify = async (refetch: boolean) =>
-			(await jwtVerify(token, (await this.load(clientId, refetch)).keys, { algorithms: ALGS, audience, issuer: clientId, clockTolerance: 30, maxTokenAge: 120 })).payload;
+			(await jwtVerify(token, (await this.load(clientId, refetch)).keys, { algorithms: ALGS, issuer: clientId, clockTolerance: 30, maxTokenAge: MAX_LIFETIME_SEC })).payload;
 		const payload = await verify(false)
 			.catch((error) => (error instanceof PoppyError ? Promise.reject(error) : verify(true)))
 			.catch((error) => {
 				throw error instanceof PoppyError ? error : fail("assertion signature or claims are invalid");
 			});
 
-		if (typeof payload.aud !== "string") throw fail("aud must be a single string");
+		// Character for character, as a single string (spec 4.1).
+		if (payload.aud !== this.config.urls.issuer) throw fail(`aud must be this Company's issuer, ${this.config.urls.issuer}, as a single string`);
 		if (typeof payload.sub !== "string" || !payload.sub) throw fail("sub is required");
 		if (kind === "client" && payload.sub !== clientId) throw fail("client assertion sub must equal client_id");
 		if (typeof payload.jti !== "string" || payload.jti.length < 16) throw fail("jti must be at least 128 bits");
 		if (typeof payload.iat !== "number" || typeof payload.exp !== "number") throw fail("iat and exp are required");
-		const maxLifetime = kind === "browser" ? 60 : 120;
-		if (payload.exp - payload.iat > maxLifetime) throw fail(`assertion lifetime exceeds ${maxLifetime} seconds`);
+		if (payload.exp - payload.iat > MAX_LIFETIME_SEC) throw fail(`assertion lifetime exceeds ${MAX_LIFETIME_SEC} seconds`);
 
 		const fresh = await claimOnce(this.config.store, `assert:${clientId}:${payload.jti}`, payload.exp * 1000 + 60_000);
 		if (!fresh) throw fail("assertion was already used");
 		return payload as JWTPayload & { sub: string; jti: string };
 	}
 
-	/** Verifies a browser assertion (spec 5): signed by the agent named in `iss`, for this endpoint, at most 60 seconds long, used once. */
-	async verifyBrowserAssertion(token: string, endpoint: string): Promise<JWTPayload & { iss: string; sub: string; session_id?: unknown; return_to?: unknown }> {
-		let iss: unknown;
-		try {
-			iss = decodeJwt(token).iss;
-		} catch {
-			throw invalidGrant("malformed assertion");
-		}
-		if (typeof iss !== "string") throw invalidGrant("iss is required");
-		const payload = await this.verifyAssertion(token, iss, endpoint, "browser");
-		return { ...payload, iss };
-	}
-
-	/** OAuth client authentication with private_key_jwt (RFC 7523). */
-	async authenticate(form: URLSearchParams, endpoint: string): Promise<LoadedClient> {
+	/** OAuth client authentication with private_key_jwt (RFC 7523), at any of the issuer's endpoints. */
+	async authenticate(form: URLSearchParams): Promise<LoadedClient> {
 		const clientId = form.get("client_id");
 		if (!clientId) throw invalidClient("client_id is required");
 		if (form.get("client_assertion_type") !== CLIENT_ASSERTION_TYPE) throw invalidClient("private_key_jwt client assertion required");
 		const assertion = form.get("client_assertion");
 		if (!assertion) throw invalidClient("client_assertion is required");
-		await this.verifyAssertion(assertion, clientId, endpoint, "client");
+		await this.verifyAssertion(assertion, clientId, "client");
 		return this.load(clientId);
 	}
 

@@ -2,7 +2,7 @@ name: spec-snapshot
 
 # Keeps spec/source/ an exact copy of the official Personal Agent Protocol site.
 # On the default branch (weekly, or a manual run): if the official text changed,
-# push the new snapshot to the spec-snapshot branch and fail, so spec/pap-0.1
+# push the new snapshot to the spec-snapshot branch and fail, so spec/pap-<version>
 # gets reconciled. The default branch is protected, so it never takes the push.
 # On any other branch: refresh the snapshot on that branch.
 on:
@@ -52,7 +52,7 @@ jobs:
           git commit -m "Snapshot personalagentprotocol.org $(cat spec/source/FETCHED_AT)"
           if [ "${{ github.ref_name }}" = "${{ github.event.repository.default_branch }}" ]; then
             git push --force origin HEAD:spec-snapshot
-            echo "::error::The official spec changed. Merge the spec-snapshot branch, then reconcile spec/pap-0.1 (pnpm spec:check lists what to do)."
+            echo "::error::The official spec changed. Merge the spec-snapshot branch, then reconcile spec/pap-<version> (pnpm spec:check lists what to do)."
             exit 1
           fi
           git push
