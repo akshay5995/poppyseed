@@ -82,7 +82,7 @@ Personal agents change the shape of web traffic: one user's request can turn int
 
 ### Finding a company
 
-When the company you reach is on a different domain from the one the user asked for, tell the user which company you're dealing with, its `organization.name` and domain, before you sign in or act for them. A well-known URL can redirect to any host's `/.well-known/poppy.json` ([section 3](/docs/0.3/spec#discovery)). A rebrand, such as `thefacebook.com` redirecting to `facebook.com`, then costs one line, and a domain that sends you to another company can't move the user's task there without them noticing.
+When the company you reach is on a different domain from the one the user asked for, tell the user which company you're dealing with, its `organization.name` and domain, before you sign in or act for them. A well-known URL can redirect to any host's `/.well-known/poppy.json` ([section 3](/docs/0.3/spec#discovery)). A rebrand, such as `oldname.example` redirecting to `newname.example`, then costs one line, and a domain that sends you to another company can't move the user's task there without them noticing.
 
 ### User IDs
 
@@ -146,8 +146,10 @@ Idempotency-Key: 4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f
 ### Choosing how to sign in
 
 - Before asking the user to sign in, check whether an account token you hold already covers the task ([4.4](/docs/0.3/spec#sign-in)).
-- Prefer direct sign-in, then device sign-in, then mediated sign-in (SHOULD, [4.4](/docs/0.3/spec#sign-in)). With direct and device sign-in, the user's password stays with the company.
-- Read each scope's description, from the company's OpenAPI description or `auth.scopes`, to pick the ones the task needs ([4.4](/docs/0.3/spec#sign-in)). Nothing marks a scope as read-only, so tell from the description whether a scope only reads.
+- Prefer direct or device sign-in to mediated sign-in (SHOULD, [4.4](/docs/0.3/spec#sign-in)), and direct to device sign-in ([4.6](/docs/0.3/spec#device-sign-in)). With direct and device sign-in, the user's password stays with the company.
+- Read each scope's description, from the company's OpenAPI description or `auth.scopes`, to pick the ones the task needs ([4.4](/docs/0.3/spec#sign-in)).
+- Use `auth.scope_hints` to decide which scopes need the user's go-ahead before you request them ([4.4](/docs/0.3/spec#sign-in)). For example, request a scope whose `changes` is `irreversible`, or whose `personal_data` is `true`, only when the user agreed to that kind of access, and let the user set that preference once rather than for every sign-in. Treat a scope without hints as `irreversible` with personal data.
+- Hints describe a whole scope. The consequences of one action still come from the action itself, such as an MCP tool's annotations, or the HTTP method: a `GET` doesn't change anything.
 - Ask for the fewest scopes the task needs, not every scope the company offers. For a task that only looks things up, request a read-only session token from a broader account token ([4.8](/docs/0.3/spec#account-tokens)).
 - The user may approve fewer scopes than you asked for. Check `scope` in the response before continuing. A response without `scope` granted every scope you asked for.
 
@@ -175,7 +177,7 @@ Idempotency-Key: 4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f
 
 - Don't put your signing private key in an app you distribute. Anyone could extract it and act as your personal agent. Keep the key on your server, and have the app ask the server to sign assertions for the signed-in user.
 - Session keys belong to one session, so the app can generate and keep them on the device, in its platform keystore.
-- Redirect URIs MUST be HTTPS URLs on your `client_id` domain ([4.1](/docs/0.3/spec#agent-identity)). To return the user to an app, use an HTTPS link the app claims, such as an iOS universal link or an Android app link, or use device sign-in.
+- Redirect URIs are HTTPS URLs on your `client_id` domain, or loopback redirect URIs ([4.1](/docs/0.3/spec#agent-identity)). To return the user to a phone app, use an HTTPS link the app claims, such as an iOS universal link or an Android app link, or use device sign-in. A desktop app can listen on a loopback port, as [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252) §7.3 describes.
 
 ### Web browsing
 
@@ -212,6 +214,7 @@ Idempotency-Key: 4f1c2e8a-9b7d-4c3e-a5f6-0d8b1e2c3a4f
 - Fetch the `client_id` URL without following redirects. Its `client_id` MUST equal the URL you fetched ([4.1](/docs/0.3/spec#agent-identity)).
 - Cache client metadata and key sets, as described in [Fetching metadata safely](#both-fetching).
 - Keep allowlists or blocklists of `client_id` values, and rate-limit session creation and new `client_id` values ([4.1](/docs/0.3/spec#agent-identity)).
+- Check whether your authorization server supports client ID metadata documents. Some do, some support them only for clients an administrator registers by URL, and some don't yet. If yours needs registration, register the personal agents you accept by their `client_id` URL and reject others with `invalid_client`, which 4.1 allows. A token service in front of your token endpoint ([Starting sessions](#company-session-start)) can also fetch and check the metadata document itself.
 
 ### Verifying DPoP
 
@@ -238,7 +241,22 @@ A session is named by the thumbprint of its session key ([4.3](/docs/0.3/spec#se
 - Support `dpop_jkt` (MUST, [4.3](/docs/0.3/spec#sending-tokens)), and reject a code exchange whose proof key doesn't match the key the code is bound to.
 - Bind each `device_code` to the key of the first poll, and return `invalid_grant` to polls with any other key ([4.6](/docs/0.3/spec#device-sign-in)).
 - Don't bind account tokens to a session key. One account token starts sessions with different keys ([4.8](/docs/0.3/spec#account-tokens)).
-- Most authorization servers can't key state by DPoP thumbprint, or start sessions from the JWT bearer grant with a user ID they haven't seen, without custom code. Plan for a hook or a small service in front of the token endpoint.
+- Most authorization servers can't key state by DPoP thumbprint without custom code. The same custom work that starts sessions can do it ([Starting sessions](#company-session-start)).
+
+### Starting sessions
+
+Most authorization servers accept a JWT bearer assertion only for a subject they already know, so they won't start a session for a user ID they've never seen ([4.2](/docs/0.3/spec#starting-sessions)). There are three ways to handle the grant:
+
+- **An extension to your authorization server,** such as a plugin or custom grant handler. It checks the assertion as 4.2 describes and issues the session token. This keeps everything in one server, if your server allows it.
+- **A token service in front of your token endpoint.** It handles the JWT bearer grant itself and passes every other request through. The session tokens it issues must be ones your APIs accept, so it signs them with your server's keys or has your server mint them.
+- **A user record on first sight.** The first assertion for a new user ID creates a user record, which your server then accepts as the assertion's subject.
+
+Records on first sight are the least custom code, but they have costs:
+
+- Your user directory fills with one record for every signed-out user, and every anonymous browsing session brings a new user ID ([4.2](/docs/0.3/spec#starting-sessions)). Keep these records apart from customer accounts, and delete ones that go unused.
+- Hosted authorization products that bill per active user may bill you for every signed-out user.
+
+Whichever you choose, the same records hold how a session and an account token link a user ID to an account ([4.4](/docs/0.3/spec#sign-in)).
 
 ### Token lifetimes and sign-out
 
@@ -247,6 +265,7 @@ A session is named by the thumbprint of its session key ([4.3](/docs/0.3/spec#se
 - Don't stop accepted work because the session token that started it expired. A job can outlast the token ([4.9](/docs/0.3/spec#sign-out)).
 - Where work in progress can take consequential actions on the user's account, such as payments or changes that are hard to undo, tie it to the account token, so revoking access stops it right away.
 - Give account tokens a lifetime that fits the account, such as 90 days, and expire ones that go unused sooner.
+- Send `refresh_token_expires_in` when an account token has a lifetime ([4.4](/docs/0.3/spec#sign-in)). An expired token and a revoked one both get `invalid_grant`, and the lifetime lets the personal agent tell the user which happened.
 - Revoke a user's account tokens when they reset their password or you suspect the account is compromised.
 
 ### Describing scopes
@@ -256,6 +275,16 @@ Every scope in `scopes_supported` needs a description, in the OAuth security sch
 - Say what the scope lets the personal agent see or do, in words a user understands.
 - Be specific enough for a model to match a task to the scopes it needs. "See your orders and returns" works better than "Read access".
 - Say whether the scope only reads, and whether a write scope also allows reading.
+- Say in words which actions can't be undone and what personal data the scope shows.
+- Give each scope its hints in `auth.scope_hints` ([4.4](/docs/0.3/spec#sign-in)). Judge each scope by the most consequential operation that requires it: one operation that can't be undone makes the whole scope `irreversible`. When you're unsure about a scope, leave it out of `auth.scope_hints` rather than guess.
+- Splitting a scope can earn it a better hint. A personal agent may request `orders:read` freely but ask the user first before requesting a scope that can cancel orders.
+
+### Describing APIs
+
+A language model usually reads your API descriptions and MCP tool descriptions to choose and call operations ([6](/docs/0.3/spec#apis)). Write them for that reader:
+
+- Say clearly what each operation does and when to use it, in terms of the user's task.
+- Keep them small. The whole description takes room in the model's context, so leave out what personal agents don't need, such as long examples or operations only your own apps call.
 
 ### Consent pages
 
@@ -263,6 +292,7 @@ The page where the user approves access, in direct and device sign-in ([4.5](/do
 
 - Show the personal agent's name and logo, and the domain of its `client_id`. The personal agent chooses its own name, so the domain is what the user can trust.
 - Show the account being connected, the requested scopes in plain language, and how long access lasts. Group related scopes rather than listing their names.
+- Point out scopes that allow changes that can't be undone or that show personal data, the scopes your `auth.scope_hints` mark `irreversible` or with `personal_data`.
 - When the user already granted some of the scopes, show which ones are new, so the user doesn't review the whole list again. A personal agent that needs more access requests every scope it needs again ([4.4](/docs/0.3/spec#sign-in)).
 - Protect the page against cross-site request forgery, and against framing by other sites with `Content-Security-Policy: frame-ancestors`.
 - `redirect_uri` MUST exactly match an entry in the personal agent's `redirect_uris` ([4.5](/docs/0.3/spec#direct-sign-in)).
@@ -365,6 +395,7 @@ Let a signed-out personal agent session do what a signed-out visitor can do on y
 - Give an alternative whenever there is one. Link to the page, or the screen in your app, where the user can do the task ([8.2](/docs/0.3/spec#alternatives)).
 - Set caching headers on the document, and update it when you add or remove a task.
 - When a feedback report asks for a task you do offer, answer with an alternative that says how, so the personal agent can finish the task ([8.3](/docs/0.3/spec#feedback)).
+- Take feedback only at `feedback.endpoint` ([8.3](/docs/0.3/spec#feedback)). Don't offer a second feedback operation in your APIs, so personal agents don't have to choose between them.
 
 ### Error messages
 
