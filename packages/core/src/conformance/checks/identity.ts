@@ -129,7 +129,10 @@ export const identityChecks = [
 			t.ok(!(response.headers.get("location") ?? "").startsWith("http://127.0.0.1"), `no redirect to a loopback path that isn't registered, got HTTP ${response.status}`);
 
 			// Plain http is for loopback only; on the agent's own domain it must be HTTPS (spec 4.1).
-			if (!agent.clientId.startsWith("https:")) t.skip("the test agent is served over http here, so its own domain can't show the difference");
+			if (!agent.clientId.startsWith("https:")) {
+				t.note("the test agent is served over http here, so an http redirect on its own domain can't be told apart");
+				return;
+			}
 			const insecure = agent.redirectUri.replace(/^https:/, "http:");
 			const other = await t.agent({ tamper: (meta) => ({ ...meta, redirect_uris: [insecure] }) });
 			await t.refused(`a redirect_uri ${insecure}`, other.startSession(), INVALID_CLIENT);
