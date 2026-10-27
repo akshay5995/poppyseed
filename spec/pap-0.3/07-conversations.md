@@ -37,7 +37,7 @@ A Company lists conversation protocols in `agent.protocols`. The one defined tod
 | --- | --- | --- |
 | `id` | Yes | Chosen by the Personal Agent, unique for the User |
 | `role` | No | `user` or `company`, set by the Company when it records the message |
-| `sender` | Yes | `agent` or `human` |
+| `author` | Yes | `type` (`agent` or `human`); Company messages may add `id`, `name` and `image` |
 | `text` | No | Natural language |
 | `data` | No | A JSON object for structured details |
 | `context` | No | `locale`, `time_zone`, `user_available`, and other facts |
@@ -49,6 +49,8 @@ A Company lists conversation protocols in `agent.protocols`. The one defined tod
 - **MAY** · company · `conv.context-ignore` — A Company may ignore `context` fields beyond those defined.
 - **SHOULD** · agent · `conv.context-minimal` — Personal Agents share only what the task needs.
 - **MUST** · company · `conv.role` — The Company sets each recorded message's `role` to `user` or `company` for the side it came from, and ignores a `role` the Personal Agent sends. *(implied)*
+- **MAY** · company · `conv.author-details` — A Company whose messages come from several people or AI personas may name the writer of each in `author`: a stable `id`, a display `name` and an HTTPS `image` URL, each optional.
+- **MUST** · company · `conv.author-company-only` — Only Company messages carry `author.id`, `name` and `image`; from a Personal Agent's message the Company records only `author.type`. *(implied)*
 - **MUST** · company · `conv.context-sticky` — `context` fields a message leaves out keep their previous values, and only the Personal Agent sends `context`. *(implied)*
 
 ## 7.5 Reading events
@@ -78,11 +80,11 @@ Every event has `id`, `type` and `created_at` (RFC 3339): `message` (with `role`
 
 - **MUST** · company · `conv.status-responder` — Every successful response to a POST or a read includes `status` and `responder`.
 - **MUST** · company · `conv.state-events` — Every change to `status` or `responder` adds a `state` event with both. *(implied)*
-- **MUST** · company · `conv.company-sender` — Each Company message includes `sender`, `agent` or `human`, and its `role` stays `company`.
+- **MUST** · company · `conv.company-sender` — Each Company message includes `author.type`, `agent` or `human`, and its `role` stays `company`.
 
 ## 7.8 Human or AI
 
-- **MUST** · agent · `conv.agent-sender` — The Personal Agent sets each message's `sender` to `agent` when it wrote the message, and to `human` only when the message carries the User's own words.
+- **MUST** · agent · `conv.agent-sender` — The Personal Agent sets each message's `author.type` to `agent` when it wrote the message, and to `human` only when the message carries the User's own words.
 
 ## 7.9 Handoff to a person
 

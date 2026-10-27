@@ -21,7 +21,7 @@ export default async function Staff({ searchParams }: { searchParams: Promise<{ 
 	}
 	async function reply(form: FormData) {
 		"use server";
-		await inbox.reply(String(form.get("id")), String(form.get("text")));
+		await inbox.reply(String(form.get("id")), String(form.get("text")), { author: { id: "aut_support", name: "Poppy Travel support" } });
 		revalidatePath("/travel/staff");
 	}
 	async function release(form: FormData) {
@@ -61,7 +61,7 @@ export default async function Staff({ searchParams }: { searchParams: Promise<{ 
 						{open.messages.map((m) => (
 							<li key={m.id}>
 								<div>
-									<strong>{m.role === "user" ? (m.sender === "human" ? "Customer" : "Customer's agent") : m.sender === "human" ? "Staff" : "Company Agent"}</strong>
+									<strong>{m.role === "user" ? (m.author.type === "human" ? "Customer" : "Customer's agent") : m.author.type === "human" ? "Staff" : "Company Agent"}</strong>
 									<div>{m.text}</div>
 								</div>
 							</li>

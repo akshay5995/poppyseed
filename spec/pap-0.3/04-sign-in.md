@@ -20,6 +20,9 @@ All three end the same way: the Company returns the Account Token as `refresh_to
 - **MUST NOT** · company · `signin.scope-namespace` — Company scope names do not start with `poppy:`, which is reserved for this protocol. *(implied)*
 - **MUST** · agent · `signin.scopes-from-metadata` — The Personal Agent requests only scopes from `scopes_supported`. *(implied)*
 - **MUST** · company · `signin.describe-scopes` — The Company describes each scope in `scopes_supported`, in the scopes of an OAuth 2.0 security scheme in an OpenAPI description it lists, or otherwise in `auth.scopes`.
+- **MAY** · company · `signin.scope-hints` — A Company may give hints about any scope in `scopes_supported` in `auth.scope_hints`, keyed by scope name, for the most consequential operation that requires it: `changes` is `none`, `reversible` or `irreversible`, and `personal_data` is a boolean.
+- **MUST** · company · `signin.scope-hints-fields` — Each `auth.scope_hints` entry includes both `changes` and `personal_data`.
+- **MUST** · agent · `signin.scope-hints-unknown` — A Personal Agent ignores hint fields it doesn't recognize, treats a `changes` value it doesn't recognize as `irreversible`, and treats a scope with no entry as having no hints.
 - **MUST** · company · `signin.scope-enforcement` — Companies decide which operations require each scope and enforce them across web browsing, APIs and actions performed by the Company Agent. *(implied)*
 - **MUST** · company · `signin.grantable` — Direct and Device Sign-In can grant any scope in `scopes_supported`, and Mediated Sign-In only the scopes in `auth.mediated.scopes`. *(implied)*
 - **MUST NOT** · company · `signin.no-extra-scopes` — The Company does not grant scopes beyond those requested and allowed for the sign-in type used.
@@ -41,7 +44,7 @@ OAuth 2.0 authorization code flow with PKCE. The authorization URL carries `resp
 - **MUST** · company · `direct.bind-code` — The Company binds the code to the Session Key, and at the exchange checks that the proof's key is that key and that its Session belongs to the same `client_id`, returning `invalid_grant` for a proof from a different key. *(implied)*
 - **MUST** · company · `direct.consent` — The Company's page shows which Personal Agent is asking, with the name and logo from its metadata, and the requested scopes, and lets the User approve some or all of them, or decline. *(implied)*
 - **MUST** · company · `direct.redirect-iss` — The Company redirects to `redirect_uri` with a one-time `code`, the same `state` and its `auth.issuer` in `iss` (RFC 9207), or with `error=access_denied` and `iss` when the User declines. *(implied)*
-- **MUST** · company · `direct.redirect-exact` — `redirect_uri` exactly matches an entry in the Personal Agent's `redirect_uris`.
+- **MUST** · company · `direct.redirect-exact` — `redirect_uri` exactly matches an entry in the Personal Agent's `redirect_uris`, except for the port of a loopback redirect URI (RFC 8252 §7.3).
 - **MUST** · agent · `direct.iss-check` — The Personal Agent checks `state`, and checks that `iss` exactly matches the `auth.issuer` of the Company it started sign-in with.
 - **MUST** · company · `direct.exchange` — At the code exchange the Company verifies the code, the PKCE verifier and the client assertion, and returns `invalid_grant` for an expired or reused code. *(implied)*
 

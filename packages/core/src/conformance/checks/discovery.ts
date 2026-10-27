@@ -111,4 +111,22 @@ export const discoveryChecks = [
 			}
 		},
 	}),
+
+	check({
+		id: "discovery/scope-hints",
+		title: "Each scope hint names an offered scope and has both changes and personal_data",
+		covers: ["signin.scope-hints", "signin.scope-hints-fields"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			const hints = agent.company.poppy.auth?.scope_hints;
+			if (hints === undefined) t.skip("the company gives no scope hints");
+			const offered = agent.company.metadata.scopes_supported ?? [];
+			for (const [scope, hint] of Object.entries(hints)) {
+				t.ok(offered.includes(scope), `scope_hints names ${scope}, which scopes_supported lists`);
+				t.ok(["none", "reversible", "irreversible"].includes(String(hint.changes)), `${scope} has changes none, reversible or irreversible, got ${JSON.stringify(hint.changes)}`);
+				t.ok(typeof hint.personal_data === "boolean", `${scope} has personal_data true or false, got ${JSON.stringify(hint.personal_data)}`);
+			}
+		},
+	}),
 ];

@@ -55,6 +55,7 @@ export async function guard(request: Request, publicUrl: string, config: Resolve
 		sessionId: session.id,
 		clientId: session.clientId,
 		userId: session.userId,
+		...(session.agentId ? { agentId: session.agentId } : {}),
 		account: account && scopes.length > 0 ? { id: account.id, scopes } : null,
 	};
 	return guardedFrom(ctx);

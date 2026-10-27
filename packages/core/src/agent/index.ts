@@ -44,6 +44,8 @@ export interface PoppyDocument {
 		issuer: string;
 		/** Descriptions of scopes no OpenAPI description describes (spec 4.4). */
 		scopes?: Record<string, string>;
+		/** As served: a Personal Agent treats an unknown `changes` as `irreversible` (spec 4.4). */
+		scope_hints?: Record<string, { changes?: unknown; personal_data?: unknown }>;
 		mediated?: { endpoint: string; scopes: string[]; fields: { name: string; label: string; secret: boolean }[] };
 	};
 	feedback?: { endpoint: string };
@@ -97,7 +99,8 @@ export interface TokenResponse {
 
 export interface ConversationMessage {
 	id: string;
-	sender: "agent" | "human";
+	/** Who wrote it: `type` always; Company messages may add `id`, `name` and `image` (spec 7.4). */
+	author: { type: "agent" | "human"; id?: string; name?: string; image?: string };
 	text?: string;
 	data?: Record<string, unknown>;
 	context?: Record<string, unknown>;
@@ -583,7 +586,7 @@ export class TestAgent {
 
 	/** A message from this agent with a fresh 128-bit ID. */
 	message(text?: string, extra: Partial<ConversationMessage> = {}): ConversationMessage {
-		return { id: `msg_${randomJti()}`, sender: "agent", ...(text !== undefined ? { text } : {}), ...extra };
+		return { id: `msg_${randomJti()}`, author: { type: "agent" }, ...(text !== undefined ? { text } : {}), ...extra };
 	}
 
 	/** Calls an MCP JSON-RPC method with a DPoP Session Token issued for the server, and returns its result. Notifications (no id) return undefined. */

@@ -30,7 +30,8 @@ export const MUTANTS: Mutant[] = [
 	{ name: "IPv4-mapped hosts are public", file: "clients.ts", find: "if (mapped) {", replace: "if (false) {", caughtBy: "identity/private-agent-urls" },
 	{ name: "NAT64 hosts are public", file: "clients.ts", find: "const mapped = /^(?:::ffff:|64:ff9b::)", replace: "const mapped = /^(?:::ffff:)", caughtBy: "identity/private-agent-urls" },
 	{ name: "skip client_id match", file: "clients.ts", find: "if (obj.client_id !== fetchedFrom) throw", replace: "if (false) throw", caughtBy: "identity/client-id-must-match" },
-	{ name: "keys on any domain", file: "clients.ts", find: "if (URL.parse(uri)?.hostname !== host) throw", replace: "if (false) throw", caughtBy: "identity/keys-same-domain" },
+	{ name: "keys on any domain", file: "clients.ts", find: "if (!onClientDomain(obj.jwks_uri)) throw", replace: "if (false) throw", caughtBy: "identity/keys-same-domain" },
+	{ name: "redirect_uris on any domain", file: "clients.ts", find: "if (!onClientDomain(uri) && !isLoopbackRedirect(uri)) throw", replace: "if (false) throw", caughtBy: "identity/keys-same-domain" },
 	{ name: "accept embedded keys", file: "clients.ts", find: "if (header.jwk || header.jku || header.x5u) throw", replace: "if (false) throw", caughtBy: "identity/assertion-lifetime" },
 	{ name: "allow long assertions", file: "clients.ts", find: "if (payload.exp - payload.iat > MAX_LIFETIME_SEC) throw", replace: "if (false) throw", caughtBy: "identity/assertion-lifetime" },
 	{ name: "client sub unchecked", file: "clients.ts", find: 'if (kind === "client" && payload.sub !== clientId) throw', replace: "if (false) throw", caughtBy: "identity/client-assertion-claims" },
@@ -72,7 +73,7 @@ export const MUTANTS: Mutant[] = [
 	{ name: "code redirect without iss", file: "consent.ts", find: "return redirectTo(a.redirectUri, { code, state: a.state, iss: config.urls.issuer });", replace: "return redirectTo(a.redirectUri, { code, state: a.state });", caughtBy: "direct/sign-in" },
 	{ name: "consent without CSRF", file: "consent.ts", find: "if (!state || state.csrf !== csrfFrom(request)) {", replace: "if (!state) {", caughtBy: "direct/consent-page" },
 	{ name: "decline without iss", file: "consent.ts", find: "return redirectTo(a.redirectUri, { error: \"access_denied\", state: a.state, iss: config.urls.issuer });", replace: "return redirectTo(a.redirectUri, { error: \"access_denied\", state: a.state });", caughtBy: "direct/decline" },
-	{ name: "redirect_uri prefix match", file: "consent.ts", find: "if (!client.meta.redirect_uris.includes(redirectUri)) {", replace: "if (!client.meta.redirect_uris.some((uri) => redirectUri.startsWith(uri))) {", caughtBy: "direct/redirect-exact" },
+	{ name: "redirect_uri prefix match", file: "clients.ts", find: "if (registered.includes(requested)) return true;", replace: "if (registered.some((uri) => requested.startsWith(uri))) return true;", caughtBy: "direct/redirect-exact" },
 	{ name: "PKCE unchecked", file: "oauth.ts", find: "if ((await secretHash(verifier)) !== record.codeChallenge) throw", replace: "if (false) throw", caughtBy: "direct/code-exchange" },
 	{ name: "unchecked scopes granted", file: "consent.ts", find: "const granted = state.scopes.filter((s) => form.getAll(\"scope\").includes(s));", replace: "const granted = state.scopes;", caughtBy: "signin/partial-approval" },
 	{ name: "unknown scopes accepted", file: "oauth.ts", find: "const unknown = scopes.filter((s) => !allowed.includes(s));", replace: "const unknown: string[] = [];", caughtBy: "signin/invalid-scope" },
@@ -111,7 +112,7 @@ export const MUTANTS: Mutant[] = [
 
 	// Leg 4: conversations
 	{ name: "conversation starts answer 200", file: "conversations.ts", find: "route.supportsOperations), 201);", replace: "route.supportsOperations), 200);", caughtBy: "conv/start" },
-	{ name: "Company messages labelled user", file: "conversations.ts", find: "const message: Message = { id: randomId(\"msg\"), role: \"company\", sender: \"agent\", text };", replace: "const message: Message = { id: randomId(\"msg\"), role: \"user\", sender: \"agent\", text };", caughtBy: "conv/reply" },
+	{ name: "Company messages labelled user", file: "conversations.ts", find: "const message: Message = { id: randomId(\"msg\"), role: \"company\", author: { type: \"agent\" }, text };", replace: "const message: Message = { id: randomId(\"msg\"), role: \"user\", author: { type: \"agent\" }, text };", caughtBy: "conv/reply" },
 	{ name: "message ID reuse accepted", file: "conversations.ts", find: "if (seen.hash !== hash) throw", replace: "if (false) throw", caughtBy: "conv/message-idempotent" },
 	{ name: "empty messages accepted", file: "conversations.ts", find: "if (m.text === undefined && m.data === undefined && m.context === undefined) throw", replace: "if (false) throw", caughtBy: "conv/message-content" },
 	{ name: "foreign cursors accepted", file: "conversations.ts", find: "if (c.events[index]?.id !== cursor) throw", replace: "if (false) throw", caughtBy: "conv/cursors" },
@@ -120,7 +121,7 @@ export const MUTANTS: Mutant[] = [
 	{ name: "closed conversations take messages", file: "conversations.ts", find: "\tif (c.state.status === \"closed\") throw closedError();\n\tif (c.link.kind === \"parent\" && c.link.open) throw directOpen(c.link.open);", replace: "\tif (c.link.kind === \"parent\" && c.link.open) throw directOpen(c.link.open);", caughtBy: "conv/close" },
 	{ name: "handoff never queues", file: "conversations.ts", find: "this.setState(c, { status: \"queued\", responder: \"agent\" });", replace: "this.setState(c, { status: \"idle\", responder: \"agent\" });", caughtBy: "conv/handoff" },
 	{ name: "two Direct Conversations at once", file: "conversations.ts", find: "if (c.link.kind === \"parent\" && c.link.open) throw directOpen(c.link.open);", replace: "", caughtBy: "conv/direct" },
-	{ name: "authorization without a message", file: "conversations.ts", find: "this.append(cur, { type: \"message\", message: { id: randomId(\"msg\"), role: \"company\", sender: cur.state.responder, text } });", replace: "", caughtBy: "conv/sign-in" },
+	{ name: "authorization without a message", file: "conversations.ts", find: "this.append(cur, { type: \"message\", message: { id: randomId(\"msg\"), role: \"company\", author: { type: cur.state.responder }, text } });", replace: "", caughtBy: "conv/sign-in" },
 	{ name: "any signed-in token may change things", file: "conversations.ts", find: "if (scope && !ctx.account?.scopes.includes(scope)) {", replace: "if (scope && !ctx.account) {", caughtBy: "conv/scopes" },
 	{ name: "signed-out reads of account conversations", file: "conversations.ts", find: "if (!ctx.account) throw scopeError(c.owner.account.scope);", replace: "if (!ctx.account) throw notFound();", caughtBy: "conv/account-bound" },
 	{ name: "messages drop operations", file: "conversations.ts", find: "if (operation && c.operations) message.operation = operation;", replace: "", caughtBy: "conv/operation-message" },
@@ -141,6 +142,13 @@ export const MUTANTS: Mutant[] = [
 	{ name: "metadata redirects followed", file: "clients.ts", find: "redirect: \"manual\",", replace: "redirect: \"follow\",", caughtBy: "guide/client-fetch" },
 
 	// 0.3
+	{ name: "scope hints without personal_data", file: "discovery.ts", find: "{ changes: hint.changes, personal_data: hint.personalData }", replace: "{ changes: hint.changes }", caughtBy: "discovery/scope-hints" },
+	{ name: "loopback redirect URIs refused", file: "clients.ts", find: " && !isLoopbackRedirect(uri)", replace: "", caughtBy: "identity/loopback-redirect" },
+	{ name: "loopback redirect port must match", file: "clients.ts", find: "return registered.some((uri) => isLoopbackRedirect(uri) && portless(uri) === portless(requested));", replace: "return false;", caughtBy: "identity/loopback-redirect" },
+	{ name: "http redirect on the agent's domain", file: "clients.ts", find: "URL.parse(uri)?.protocol === protocol && ", replace: "", caughtBy: "identity/loopback-redirect" },
+	{ name: "a renewal changes the Agent ID", file: "oauth.ts", find: "if (session.agentId !== agentId)", replace: "if (false)", caughtBy: "sessions/agent-id" },
+	{ name: "any Agent ID accepted", file: "oauth.ts", find: "(typeof agentId !== \"string\" || !agentId || agentId.length > 256)", replace: "false", caughtBy: "sessions/agent-id" },
+	{ name: "agent messages name a writer", file: "conversations.ts", find: "author: { type },", replace: "author: { ...(m.author as object), type },", caughtBy: "conv/message-content" },
 	{ name: "conversations act on a revoked sign-in", file: "conversations.ts", find: "const ctx = await this.current(c.caller);", replace: "const ctx = c.caller;", caughtBy: "conv/account-bound" },
 	{ name: "Session assertions to any audience", file: "clients.ts", find: "if (payload.aud !== this.config.urls.issuer) throw", replace: "if (typeof payload.aud !== \"string\") throw", caughtBy: "sessions/assertion-aud" },
 	{ name: "ended Session keys start new Sessions", file: "records.ts", find: "throw invalidGrant(\"the Session has ended; start a new Session with a new key\");", replace: "", caughtBy: "sessions/ended-session" },
@@ -154,7 +162,7 @@ export const MUTANTS: Mutant[] = [
 	{ name: "excluded tasks uncacheable", file: "tasks.ts", find: "return json({ tasks }, 200, { \"cache-control\": \"public, max-age=3600\" });", replace: "return json({ tasks }, 200, {});", caughtBy: "tasks/excluded" },
 	{ name: "only known feedback kinds", file: "tasks.ts", find: "if (typeof kind !== \"string\" || !kind) throw", replace: "if (kind !== \"missing\") throw", caughtBy: "tasks/feedback" },
 	{ name: "extension_required only in the body", file: "openapi.ts", find: "...(refused ? { \"www-authenticate\": 'DPoP error=\"extension_required\", extension=\"operations\"' } : {})", replace: "", caughtBy: "ops/require-extension" },
-	{ name: "role taken from the Personal Agent", file: "conversations.ts", find: "\t\trole: \"user\",\n\t\tsender: m.sender,", replace: "\t\trole: m.role === \"company\" ? \"company\" : \"user\",\n\t\tsender: m.sender,", caughtBy: "conv/message-content" },
+	{ name: "role taken from the Personal Agent", file: "conversations.ts", find: "\t\trole: \"user\",", replace: "\t\trole: m.role === \"company\" ? \"company\" : \"user\",", caughtBy: "conv/message-content" },
 ];
 
 /** Shipped checks that no mutant can break, and why. Keep this list short. */

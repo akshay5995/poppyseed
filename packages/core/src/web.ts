@@ -89,6 +89,7 @@ export async function readBrowserSession(request: Request, config: ResolvedConfi
 		sessionId: session.id,
 		clientId: session.clientId,
 		userId: session.userId,
+		...(session.agentId ? { agentId: session.agentId } : {}),
 		account: signedIn && session.account ? { id: session.account.id, scopes: signedIn.scopes } : null,
 	};
 }

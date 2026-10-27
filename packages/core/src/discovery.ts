@@ -12,6 +12,7 @@ export function poppyDocument(config: ResolvedConfig, tools: Tools): Record<stri
 		...(signIn?.mediated ? { mediated: { endpoint: urls.mediated, fields: signIn.mediated.fields, scopes: signIn.mediated.scopes } } : {}),
 		// The OpenAPI description doesn't describe scopes, so every scope is described here (spec 4.4).
 		...(Object.keys(config.scopes).length > 0 ? { scopes: config.scopes } : {}),
+		...(config.scopeHints ? { scope_hints: Object.fromEntries(Object.entries(config.scopeHints).map(([name, hint]) => [name, { changes: hint.changes, personal_data: hint.personalData }])) } : {}),
 	};
 	const description = config.apiDescription;
 	const apis = tools.list.length > 0 ? [{ type: "mcp", url: urls.mcp, description }, { type: "openapi", url: urls.openapi, description }] : undefined;

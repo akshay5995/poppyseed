@@ -108,7 +108,7 @@ function transcript(history: Message[]): ApiMessage[] {
 	const messages: ApiMessage[] = [];
 	for (const m of history) {
 		const role = m.role === "user" ? "user" : "assistant";
-		const who = m.role === "user" ? (m.sender === "human" ? "Customer" : "Customer's agent") : m.sender === "human" ? "Staff member" : "You";
+		const who = m.role === "user" ? (m.author.type === "human" ? "Customer" : "Customer's agent") : m.author.type === "human" ? "Staff member" : "You";
 		const parts = [m.text, m.data ? `Details: ${JSON.stringify(m.data)}` : undefined].filter(Boolean).join("\n");
 		if (!parts) continue;
 		const text = role === "user" ? `${who}: ${parts}` : parts;

@@ -111,6 +111,31 @@ export const identityChecks = [
 		],
 	),
 
+	check({
+		id: "identity/loopback-redirect",
+		title: "A loopback redirect URI is accepted, and matches on any port, while an http URL on the agent's domain is not",
+		covers: ["identity.loopback-redirect", "identity.same-domain", "direct.redirect-exact"],
+		leg: 2,
+		async run(t: Harness) {
+			const loopback = "http://127.0.0.1/callback";
+			const tamper = (meta: Record<string, unknown>) => ({ ...meta, redirect_uris: [new URL("callback", String(meta.client_id)).toString(), loopback] });
+			const { agent, token } = await t.session({ agent: { tamper } });
+			// RFC 8252 §7.3: the app listens on whatever port it got, so the port is the one part that may differ.
+			const onPort = "http://127.0.0.1:51004/callback";
+			const signedIn = await t.signInDirect(agent, token.session, { redirectUri: onPort });
+			t.ok(signedIn.refresh_token, `Direct Sign-In returns to ${onPort} and its code works`);
+			const elsewhere = await agent.authorizationRequest(t.offered("direct").join(" "), token.session, { redirectUri: "http://127.0.0.1:51004/elsewhere" });
+			const response = await (await t.browser("alice")).request(elsewhere.url);
+			t.ok(!(response.headers.get("location") ?? "").startsWith("http://127.0.0.1"), `no redirect to a loopback path that isn't registered, got HTTP ${response.status}`);
+
+			// Plain http is for loopback only; on the agent's own domain it must be HTTPS (spec 4.1).
+			if (!agent.clientId.startsWith("https:")) t.skip("the test agent is served over http here, so its own domain can't show the difference");
+			const insecure = agent.redirectUri.replace(/^https:/, "http:");
+			const other = await t.agent({ tamper: (meta) => ({ ...meta, redirect_uris: [insecure] }) });
+			await t.refused(`a redirect_uri ${insecure}`, other.startSession(), INVALID_CLIENT);
+		},
+	}),
+
 	refusals({ id: "identity/client-id-is-url", title: "A client_id that is not a URL is refused", covers: ["identity.client-id-url"], leg: 1, expect: INVALID_CLIENT }, [
 		{ label: "client_id 'my-agent'", agent: { clientId: "my-agent" } },
 	]),

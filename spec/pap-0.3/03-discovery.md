@@ -12,7 +12,7 @@ A Company describes everything it offers Personal Agents in one document at `/.w
 - **MUST** · agent · `discovery.final-path` — Personal Agents use the document only when the last URL's path is exactly `/.well-known/poppy.json` and it has no query.
 - **SHOULD** · agent · `discovery.cache` — Personal Agents cache the document according to its HTTP caching headers.
 - **MUST** · agent · `discovery.two-way` — Before using a document, the Personal Agent checks that `organization.domain` is the host that served it, and that the issuer's metadata has the same `issuer` and lists `https://{organization.domain}` in `protected_resources`. *(implied)*
-- **MUST** · both · `discovery.https` — Every URL the protocol defines or exchanges is an HTTPS URL; Personal Agents don't use a URL from a Company with another scheme, and Companies reject one from a Personal Agent.
+- **MUST** · both · `discovery.https` — Every URL the protocol defines or exchanges is an HTTPS URL, except the Company's website pages and loopback redirect URIs; Personal Agents don't use a URL from a Company with another scheme, and Companies reject one from a Personal Agent.
 - **MUST NOT** · agent · `discovery.redirect-secrets` — When a protocol endpoint, API, or conversation, feedback or extension endpoint answers with a redirect, the Personal Agent does not send a token, DPoP Proof, assertion or credentials to the new URL.
 - **MUST NOT** · both · `discovery.private-addresses` — Personal Agents and Companies do not connect to a loopback, private or link-local address for a URL the other party gave them, unless configured to on purpose.
 
@@ -22,7 +22,7 @@ A Company describes everything it offers Personal Agents in one document at `/.w
 | --- | --- |
 | `protocol_version` | Yes. `major.minor`; this draft is `0.3`. |
 | `organization` | Yes. `name`, and `domain`, the host that serves the document. |
-| `auth` | When `agent`, `apis`, `feedback` or `web.browser_session_endpoint` is present. `issuer` (HTTPS), `mediated` if supported, and `scopes` for scopes no OpenAPI description describes. |
+| `auth` | When `agent`, `apis`, `feedback` or `web.browser_session_endpoint` is present. `issuer` (HTTPS), `mediated` if supported, `scopes` for scopes no OpenAPI description describes, and optional `scope_hints`. |
 | `agent`, `apis`, `web` | At least one of them. |
 | `feedback`, `excluded_tasks`, `extensions` | No. |
 

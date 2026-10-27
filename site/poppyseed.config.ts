@@ -60,6 +60,12 @@ export const poppyseed = definePoppyseed({
 		"trips:write": "Book, change and cancel trips for you, each one only after you approve it. It doesn't let the agent see your other trips.",
 		"travel:loyalty": "See your Poppy Miles balance",
 	},
+	// How consequential each scope is, so a personal agent can ask you before requesting it.
+	scopeHints: {
+		"trips:read": { changes: "none", personalData: true },
+		"trips:write": { changes: "irreversible", personalData: true },
+		"travel:loyalty": { changes: "none", personalData: true },
+	},
 
 	// Who is signed in to poppy.travel itself, so consent pages know whose account they connect.
 	accounts: {
