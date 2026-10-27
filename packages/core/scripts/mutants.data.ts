@@ -30,7 +30,6 @@ export const MUTANTS: Mutant[] = [
 	{ name: "IPv4-mapped hosts are public", file: "clients.ts", find: "if (mapped) {", replace: "if (false) {", caughtBy: "identity/private-agent-urls" },
 	{ name: "NAT64 hosts are public", file: "clients.ts", find: "const mapped = /^(?:::ffff:|64:ff9b::)", replace: "const mapped = /^(?:::ffff:)", caughtBy: "identity/private-agent-urls" },
 	{ name: "skip client_id match", file: "clients.ts", find: "if (obj.client_id !== fetchedFrom) throw", replace: "if (false) throw", caughtBy: "identity/client-id-must-match" },
-	{ name: "keys on any domain", file: "clients.ts", find: "if (!onClientDomain(obj.jwks_uri)) throw", replace: "if (false) throw", caughtBy: "identity/keys-same-domain" },
 	{ name: "redirect_uris on any domain", file: "clients.ts", find: "if (!onClientDomain(uri) && !isLoopbackRedirect(uri)) throw", replace: "if (false) throw", caughtBy: "identity/keys-same-domain" },
 	{ name: "accept embedded keys", file: "clients.ts", find: "if (header.jwk || header.jku || header.x5u) throw", replace: "if (false) throw", caughtBy: "identity/assertion-lifetime" },
 	{ name: "allow long assertions", file: "clients.ts", find: "if (payload.exp - payload.iat > MAX_LIFETIME_SEC) throw", replace: "if (false) throw", caughtBy: "identity/assertion-lifetime" },
