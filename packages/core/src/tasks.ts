@@ -2,7 +2,7 @@ import { invalidRequest } from "./errors.ts";
 import type { Guarded } from "./guard.ts";
 import { strictJson } from "./json.ts";
 import type { Alternative, ExcludedTask, ResolvedConfig } from "./types.ts";
-import { json } from "./util.ts";
+import { json, parseUrl } from "./util.ts";
 
 /**
  * Tasks you don't offer (spec 8): the excluded tasks document, and the
@@ -26,7 +26,7 @@ function checkAlternative(alternative: Alternative, toolNames: string[], where: 
 	if ((alternative.instructions?.length ?? 0) > TEXT_MAX) throw new Error(`poppyseed: the alternative for ${where} has instructions over ${TEXT_MAX} characters`);
 	for (const ref of alternative.references ?? []) {
 		if ("tool" in ref && !toolNames.includes(ref.tool)) throw new Error(`poppyseed: the alternative for ${where} names unknown tool ${ref.tool}`);
-		if ("web" in ref && URL.parse(ref.web)?.protocol !== "https:") throw new Error(`poppyseed: the alternative for ${where} links to ${ref.web}, which is not an HTTPS URL`);
+		if ("web" in ref && parseUrl(ref.web)?.protocol !== "https:") throw new Error(`poppyseed: the alternative for ${where} links to ${ref.web}, which is not an HTTPS URL`);
 	}
 }
 

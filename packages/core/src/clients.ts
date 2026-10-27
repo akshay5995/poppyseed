@@ -1,6 +1,7 @@
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JSONWebKeySet, type JWTPayload } from "jose";
 import { invalidClient, invalidGrant, PoppyError } from "./errors.ts";
 import { claimOnce } from "./records.ts";
+import { parseUrl } from "./util.ts";
 import type { ResolvedConfig } from "./types.ts";
 
 export interface ClientMetadata {
@@ -194,7 +195,7 @@ export function parseClientMetadata(input: unknown, fetchedFrom: string): Client
 	}
 	// On the client_id's own origin scheme and host: HTTPS, except a local client_id in dev mode (spec 4.1).
 	const { protocol, hostname } = new URL(fetchedFrom);
-	const onClientDomain = (uri: string) => URL.parse(uri)?.protocol === protocol && URL.parse(uri)?.hostname === hostname;
+	const onClientDomain = (uri: string) => parseUrl(uri)?.protocol === protocol && parseUrl(uri)?.hostname === hostname;
 	if (!onClientDomain(obj.jwks_uri)) throw invalidClient("jwks_uri must be a URL on the client_id domain");
 	for (const uri of redirects as string[]) {
 		if (!onClientDomain(uri) && !isLoopbackRedirect(uri)) throw invalidClient("redirect_uris must be URLs on the client_id domain, or loopback redirect URIs (RFC 8252 §7.3)");
@@ -211,7 +212,7 @@ export function parseClientMetadata(input: unknown, fetchedFrom: string): Client
 
 /** A loopback redirect URI for an app on the User's computer: http on a loopback IP literal, any port (RFC 8252 §7.3). */
 function isLoopbackRedirect(uri: string): boolean {
-	const url = URL.parse(uri);
+	const url = parseUrl(uri);
 	return url?.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "[::1]");
 }
 
