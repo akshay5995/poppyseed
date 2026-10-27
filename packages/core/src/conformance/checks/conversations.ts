@@ -1,6 +1,5 @@
 import type { ConversationEvent } from "../../agent/index.ts";
 import { check } from "../check.ts";
-import { parseUrl } from "../../util.ts";
 import { OPERATIONS_EXTENSION, type Harness } from "../harness.ts";
 
 const ID = /^[A-Za-z0-9_-]{1,256}$/;
@@ -259,7 +258,7 @@ export const conversationChecks = [
 				// A Company may name the person (spec 7.4): strings, and an HTTPS picture.
 				const { id: authorId, name, image } = human?.message?.author ?? {};
 				t.ok([authorId, name, image].every((v) => v === undefined || (typeof v === "string" && v.length > 0)), "author id, name and image are strings when present");
-				if (image !== undefined) t.ok(parseUrl(image)?.protocol === "https:", `the author's image is an HTTPS URL, got ${image}`);
+				if (image !== undefined) t.ok(URL.parse(image)?.protocol === "https:", `the author's image is an HTTPS URL, got ${image}`);
 				// A person is handling it already: a handoff returns the current state and changes nothing (spec 7.9).
 				const before = (await agent.events(token.access_token, id)).events.length;
 				const repeat = await agent.handoff(token.access_token, id);

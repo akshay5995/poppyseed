@@ -2,7 +2,6 @@ import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT, type JWK, 
 import type { Fetch } from "./types.ts";
 
 import type { Browser } from "./browser.ts";
-import { parseUrl } from "../util.ts";
 
 export { Browser, type BrowserSessionForm, type ConsentForm } from "./browser.ts";
 export { httpAgentHost, memoryAgentHost, type AgentHost, type HostedAgentOptions, type RecordedRequest } from "./host.ts";
@@ -481,9 +480,9 @@ export class TestAgent {
 	 * subdomain of either (spec 4.6).
 	 */
 	mayShowVerificationUri(uri: string): boolean {
-		const host = parseUrl(uri)?.hostname.toLowerCase();
+		const host = URL.parse(uri)?.hostname.toLowerCase();
 		if (!host) return false;
-		const hosts = [this.company.metadata.issuer, ...this.company.metadata.protected_resources].flatMap((u) => parseUrl(u)?.hostname.toLowerCase() ?? []);
+		const hosts = [this.company.metadata.issuer, ...this.company.metadata.protected_resources].flatMap((u) => URL.parse(u)?.hostname.toLowerCase() ?? []);
 		return hosts.some((h) => host === h || host.endsWith(`.${h}`));
 	}
 

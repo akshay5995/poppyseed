@@ -6,7 +6,7 @@ import { loadSession } from "./records.ts";
 import type { Store } from "./store.ts";
 import type { ToolInfo, ToolResult, Tools } from "./tools.ts";
 import type { ResolvedConfig, SessionContext } from "./types.ts";
-import { json, parseUrl, randomId } from "./util.ts";
+import { json, randomId } from "./util.ts";
 
 /**
  * Conversations (spec 7): the Personal Agent talks with your Company Agent,
@@ -335,7 +335,7 @@ export class Conversations {
 	/** A message from the person handling the conversation. */
 	async reply(id: string, text: string, extra: { data?: Record<string, unknown>; author?: Omit<Author, "type"> } = {}): Promise<void> {
 		// The writer's picture is a URL the protocol exchanges, so HTTPS only (spec 3).
-		if (extra.author?.image !== undefined && parseUrl(extra.author.image)?.protocol !== "https:") throw new Error("poppyseed: author.image must be an HTTPS URL");
+		if (extra.author?.image !== undefined && URL.parse(extra.author.image)?.protocol !== "https:") throw new Error("poppyseed: author.image must be an HTTPS URL");
 		await this.mutate(id, (c) => {
 			if (c.state.status === "closed") throw closedError();
 			const author: Author = { ...extra.author, type: "human" };

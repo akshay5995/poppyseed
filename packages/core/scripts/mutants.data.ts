@@ -144,7 +144,7 @@ export const MUTANTS: Mutant[] = [
 	{ name: "scope hints without personal_data", file: "discovery.ts", find: "{ changes: hint.changes, personal_data: hint.personalData }", replace: "{ changes: hint.changes }", caughtBy: "discovery/scope-hints" },
 	{ name: "loopback redirect URIs refused", file: "clients.ts", find: " && !isLoopbackRedirect(uri)", replace: "", caughtBy: "identity/loopback-redirect" },
 	{ name: "loopback redirect port must match", file: "clients.ts", find: "return registered.some((uri) => isLoopbackRedirect(uri) && portless(uri) === portless(requested));", replace: "return false;", caughtBy: "identity/loopback-redirect" },
-	{ name: "http redirect on the agent's domain", file: "clients.ts", find: "parseUrl(uri)?.protocol === protocol && ", replace: "", caughtBy: "identity/loopback-redirect" },
+	{ name: "http redirect on the agent's domain", file: "clients.ts", find: "URL.parse(uri)?.protocol === protocol && ", replace: "", caughtBy: "identity/loopback-redirect" },
 	{ name: "a renewal changes the Agent ID", file: "oauth.ts", find: "if (session.agentId !== agentId)", replace: "if (false)", caughtBy: "sessions/agent-id" },
 	{ name: "any Agent ID accepted", file: "oauth.ts", find: "(typeof agentId !== \"string\" || !agentId || agentId.length > 256)", replace: "false", caughtBy: "sessions/agent-id" },
 	{ name: "agent messages name a writer", file: "conversations.ts", find: "author: { type },", replace: "author: { ...(m.author as object), type },", caughtBy: "conv/message-content" },
