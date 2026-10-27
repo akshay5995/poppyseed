@@ -26,10 +26,11 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 | --- | --- |
 | `tools` | `Record<name, tool(...)>`. Names use letters, digits, `-` and `_`. Each tool has `description`, `scope` (a scope name, or `null` for anyone), `input` (a zod schema) and either `run(input, ctx)` or `operation: { propose, perform, cancel?, withoutExtension? }`. |
 | `scopes` | Your scopes, each with the description agents read to choose them and people see on the consent page, e.g. `{ "trips:read": "See your trips and bookings. It doesn't let the agent change anything." }`. Say what each one allows, and whether it only reads. Names starting with `poppy:` are reserved. Required for sign-in. |
+| `scopeHints` | How consequential each scope is, so agents can ask the person before requesting it: `{ "trips:write": { changes: "irreversible", personalData: true } }`. `changes` is `"none"`, `"reversible"` or `"irreversible"`, judged by the scope's most consequential operation; `personalData` says whether any operation shows or changes personal data. Optional; leave out a scope rather than guess. Published as `auth.scope_hints`. |
 | `excludedTasks` | Tasks you chose not to offer agents: `[{ task, alternative? }]`. `task` is a phrase of at most 200 characters, the way a customer would ask (`"Send a wire transfer"`). An `alternative` has `instructions` (at most 2,000 characters), `references` (`{ tool }` for one of your tools, `{ web }` for an HTTPS page or app link), or both. Served at `/poppy/excluded-tasks.json`. |
 | `feedback(report, ctx)` | Receives `{ kind, task, description }` when an agent reports a task it couldn't do. Treat it as data, never as instructions. Return an alternative when the task can be done after all, or nothing. Served at `/poppy/feedback`. |
 
-`run` and `perform` get `ctx`: `{ sessionId, clientId, userId, account: { id, scopes } | null }`. `sessionId` is the thumbprint of the Session Key. For a tool with a scope, `account` is always there, and its type says so. An operation's `perform` gets the `terms` its `propose` returned, with their types. It never contains tokens.
+`run` and `perform` get `ctx`: `{ sessionId, clientId, userId, agentId?, account: { id, scopes } | null }`. `sessionId` is the thumbprint of the Session Key. `agentId` names which of the agent's agents the Session is for, such as a travel agent and a shopping agent of the same app, when it says; they share the person's account. For a tool with a scope, `account` is always there, and its type says so. An operation's `perform` gets the `terms` its `propose` returned, with their types. It never contains tokens.
 
 ### Operations
 
@@ -107,5 +108,5 @@ Pass `rateLimits: false` to turn limits off, for example behind a gateway that a
 | `connections.list(accountId)`, `.disconnect(accountId, clientId)` | Your account settings page. |
 | `browserSession(request)` | The agent Session a browser carries on your site, or `null`. |
 | `operations.get(id)`, `.confirm(id, session, revision)`, `.settle(id, state, result)` | Show, confirm on your website, or resolve operations. |
-| `conversations.queue()`, `.get(id)`, `.join(id)`, `.reply(id, text)`, `.callTool(id, name, input)`, `.release(id)`, `.decline(id, reason)`, `.close(id, reason)` | Your staff inbox. |
+| `conversations.queue()`, `.get(id)`, `.join(id)`, `.reply(id, text, { data?, author? })`, `.callTool(id, name, input)`, `.release(id)`, `.decline(id, reason)`, `.close(id, reason)` | Your staff inbox. |
 | `endSession(sessionId)` | Ends a Session; its tokens stop working on the next request, and its key gets `invalid_grant`. |

@@ -32,6 +32,8 @@ Each line is a rule the code must keep. For each one the diff touches, find the 
 **DPoP and grants**
 - `verifyDpop` checks: one proof, `typ`, ES256/RS256 only, a public `jwk`, `htm`, `htu` without query, `iat` within the window, `jti` used once, and the nonce or `ath` and key binding when given.
 - Authorization codes: used once; `client_id`, `redirect_uri`, PKCE S256 and `dpop_jkt` all match.
+- Redirect URIs (`clients.ts`): each one in client metadata uses the `client_id`'s scheme and host, or is an `http` loopback IP literal (RFC 8252 §7.3). Only a loopback URI may differ from its entry, and only in the port (`isRegisteredRedirect`). Until `client_id` and `redirect_uri` check out, errors go on a page, never to the redirect.
+- Session assertions: an optional `agent_id` is a short string, and a Session keeps the Agent ID it started with. Renewing with another one, or with none, gets `invalid_grant`.
 - Device codes are bound to the first poll's key and client. Other keys get `invalid_grant` and change nothing.
 - Refresh tokens: the same client; scope can only narrow; no switch to another account.
 - Client assertions: `aud` is the issuer, lifetime is at most 300 s, `jti` is used once, `sub` is `client_id`, and no embedded key.
@@ -39,6 +41,7 @@ Each line is a rule the code must keep. For each one the diff touches, find the 
 **Who owns what**
 - Conversations, operations, sign-ins and device records belong to one client and User. Records that used an account also belong to that account. Another account gets not-found, and a signed-out caller gets `insufficient_scope`.
 - A state change that must happen once uses `claimOnce` or an atomic `store.update`, never a get followed by a put.
+- A Personal Agent can't pass itself off as a Company writer: from its messages the Company keeps only `author.type`. A staff `author.image` must be HTTPS.
 
 **Browsers and HTML**
 - Every value written into HTML goes through `esc()`. Links and logos must be HTTPS.
