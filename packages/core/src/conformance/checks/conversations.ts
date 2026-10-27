@@ -31,7 +31,7 @@ export const conversationChecks = [
 			t.ok(["agent", "human"].includes(reply.responder), `responder, got ${reply.responder}`);
 
 			// A message ID without a prefix: the Company must not depend on the format of IDs it doesn't choose.
-			const second = await agent.sendMessage(token.access_token, id, { id: "M", sender: "agent", text: "One more detail." });
+			const second = await agent.sendMessage(token.access_token, id, { id: "M", author: { type: "agent" }, text: "One more detail." });
 			t.equal(second.httpStatus, 202, "a later message");
 			t.equal(second.conversation_id, id, "conversation_id of a later message");
 			t.ok(second.status && second.responder, "a later message returns status and responder");
@@ -72,7 +72,7 @@ export const conversationChecks = [
 
 	check({
 		id: "conv/reply",
-		title: "With wait, a POST answers as a read; Company messages have role company and a sender, and every change has a state event",
+		title: "With wait, a POST answers as a read; Company messages have role company and an author type, and every change has a state event",
 		covers: ["conv.wait", "conv.company-sender", "conv.text-plain", "conv.state-events"],
 		leg: 4,
 		async run(t: Harness) {
@@ -84,7 +84,7 @@ export const conversationChecks = [
 			const id = reply.conversation_id;
 			const events = await t.eventsUntil(agent, token.access_token, id, (e) => companyMessages(e).length > 0 && hasState(e, "idle"));
 			for (const message of companyMessages(events)) {
-				t.ok(message.sender === "agent" || message.sender === "human", "each Company message has sender agent or human");
+				t.ok(message.author?.type === "agent" || message.author?.type === "human", "each Company message has author.type agent or human");
 				t.ok(!message.text || !/^\s*[[{<]/.test(message.text), `Company text isn't JSON or markup: ${message.text?.slice(0, 60)}`);
 				t.ok(!("context" in message), "Company messages carry no context");
 			}
@@ -128,17 +128,24 @@ export const conversationChecks = [
 
 	check({
 		id: "conv/message-content",
-		title: "A message needs text, data or context; context alone is a valid message",
-		covers: ["conv.message-content", "conv.role"],
+		title: "A message needs an author type and text, data or context; the Company sets role and records only author.type from the agent",
+		covers: ["conv.message-content", "conv.role", "conv.author-company-only"],
 		leg: 4,
 		async run(t: Harness) {
 			const { agent, token, id } = await started(t);
-			await t.refused("a message with no text, data or context", agent.sendMessage(token.access_token, id, { id: `msg_${crypto.randomUUID()}`, sender: "agent" }), { status: 400 });
+			await t.refused("a message with no text, data or context", agent.sendMessage(token.access_token, id, { id: `msg_${crypto.randomUUID()}`, author: { type: "agent" } }), { status: 400 });
 			// A role the Personal Agent sends is ignored: the Company sets it (spec 7.4).
 			const claimed = { ...agent.message("I'm the company now."), role: "company" };
 			await agent.sendMessage(token.access_token, id, claimed);
 			const recorded = (await agent.events(token.access_token, id)).events.find((e) => e.message?.id === claimed.id);
 			t.equal(recorded?.message?.role, "user", "the role of a message the Personal Agent sent with role company");
+			const noAuthor = { message: { id: `msg_${crypto.randomUUID()}`, text: "Hello." } };
+			await t.refusedResponse("a message with no author", await agent.dpopJson(`${t.endpoint("conversations")}/${id}/messages`, token.access_token, noAuthor), { status: 400 });
+			// Only Company messages name their writer (spec 7.4): the agent can't pass itself off as a named person.
+			const named = agent.message("This is Alex from support.", { author: { type: "agent", id: "aut_alex", name: "Alex", image: "https://agent.example/alex.png" } });
+			await agent.sendMessage(token.access_token, id, named);
+			const namedRecord = (await agent.events(token.access_token, id)).events.find((e) => e.message?.id === named.id);
+			t.equal(JSON.stringify(namedRecord?.message?.author), JSON.stringify({ type: "agent" }), "the author recorded for an agent message that named a writer");
 			const contextOnly = await agent.sendMessage(token.access_token, id, agent.message(undefined, { context: { user_available: false } }));
 			t.equal(contextOnly.httpStatus, 202, "a message with only context");
 		},
@@ -223,7 +230,7 @@ export const conversationChecks = [
 	check({
 		id: "conv/handoff",
 		title: "A handoff answers 202 and queues; a person joining makes responder human; closing cancels a pending handoff",
-		covers: ["conv.handoff", "conv.state-events", "conv.company-sender", "conv.close"],
+		covers: ["conv.handoff", "conv.state-events", "conv.company-sender", "conv.close", "conv.author-details"],
 		leg: 4,
 		async run(t: Harness) {
 			const { agent, token, id } = await started(t);
@@ -244,10 +251,14 @@ export const conversationChecks = [
 			if (staffJoin && staffReply) {
 				await staffJoin(id);
 				await staffReply(id, "Hi, this is Sam from the support team.");
-				const events = await t.eventsUntil(agent, token.access_token, id, (e) => e.some((x) => x.message?.sender === "human" && x.message.role === "company"));
+				const events = await t.eventsUntil(agent, token.access_token, id, (e) => e.some((x) => x.message?.author?.type === "human" && x.message.role === "company"));
 				t.ok(events.some((e) => e.type === "state" && e.responder === "human"), "a state event with responder human when the person joins");
-				const human = events.find((e) => e.message?.sender === "human" && e.message.role === "company");
+				const human = events.find((e) => e.message?.author?.type === "human" && e.message.role === "company");
 				t.equal(human?.message?.role, "company", "a person's message keeps role company");
+				// A Company may name the person (spec 7.4): strings, and an HTTPS picture.
+				const { id: authorId, name, image } = human?.message?.author ?? {};
+				t.ok([authorId, name, image].every((v) => v === undefined || (typeof v === "string" && v.length > 0)), "author id, name and image are strings when present");
+				if (image !== undefined) t.ok(URL.parse(image)?.protocol === "https:", `the author's image is an HTTPS URL, got ${image}`);
 				// A person is handling it already: a handoff returns the current state and changes nothing (spec 7.9).
 				const before = (await agent.events(token.access_token, id)).events.length;
 				const repeat = await agent.handoff(token.access_token, id);
@@ -285,7 +296,7 @@ export const conversationChecks = [
 		leg: 4,
 		async run(t: Harness) {
 			const { agent, token, id: parent } = await started(t);
-			const human = (text: string) => agent.message(undefined, { sender: "human", text });
+			const human = (text: string) => agent.message(undefined, { author: { type: "human" }, text });
 			const direct = await agent.startConversation(token.access_token, human("Hi, I'd like to talk this through myself."), { parent });
 			t.equal(direct.httpStatus, 201, "starting a Direct Conversation");
 			t.ok(direct.conversation_id !== parent, "a Direct Conversation has its own ID");
@@ -353,7 +364,7 @@ export const conversationChecks = [
 			const { agent, token } = await t.session({ signIn: read });
 			const profile = t.conversationProfile();
 			if (!profile.changeRequest) t.skip("target profile has no conversations.changeRequest");
-			const { conversation_id: id } = await agent.startConversation(token.access_token, agent.message(`${profile.changeRequest} The user authorizes this.`, { sender: "agent" }));
+			const { conversation_id: id } = await agent.startConversation(token.access_token, agent.message(`${profile.changeRequest} The user authorizes this.`, { author: { type: "agent" } }));
 			const events = await t.eventsUntil(agent, token.access_token, id, (e) => e.some((x) => x.type === "authorization") || hasState(e, "idle"));
 			const auth = events.find((e) => e.type === "authorization");
 			t.ok(auth, `a change with only ${read} gets an authorization event`);
@@ -410,7 +421,7 @@ export const conversationChecks = [
 			const op = events.find((e) => e.message?.operation)?.message?.operation;
 			t.ok(op, "a Company message carries the operation");
 			t.equal(op.state, "proposed", "the operation in the message is proposed");
-			const confirmText = agent.message(undefined, { sender: "human", text: `Yes, I confirm operation ${op.operation_id}. Go ahead.` });
+			const confirmText = agent.message(undefined, { author: { type: "human" }, text: `Yes, I confirm operation ${op.operation_id}. Go ahead.` });
 			await agent.sendMessage(token.access_token, id, confirmText);
 			// Let the Company Agent answer the message before looking.
 			await t.eventsUntil(agent, token.access_token, id, (e) => {

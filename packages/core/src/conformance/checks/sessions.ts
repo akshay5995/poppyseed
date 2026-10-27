@@ -74,6 +74,26 @@ export const sessionChecks = [
 	}),
 
 	check({
+		id: "sessions/agent-id",
+		title: "A Session keeps the Agent ID it started with: a renewal naming another agent, or none, is refused",
+		covers: ["sessions.agent-id-kept"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			const as = (agentId?: unknown) => ({ assertion: agentId === undefined ? {} : { claims: { agent_id: agentId } } });
+			const travel = await agent.startSession(as("agt_travel"));
+			const renewed = await agent.startSession({ session: travel.session, ...as("agt_travel") });
+			t.ok(renewed.access_token, "a renewal with the same Agent ID");
+			await t.refused("a renewal naming another agent", agent.startSession({ session: travel.session, ...as("agt_shopping") }), INVALID_GRANT);
+			await t.refused("a renewal with no Agent ID", agent.startSession({ session: travel.session }), INVALID_GRANT);
+			// A Session that started without one can't take one on later.
+			const plain = await agent.startSession();
+			await t.refused("naming an agent when renewing a Session that had none", agent.startSession({ session: plain.session, ...as("agt_travel") }), INVALID_GRANT);
+			await t.refused("an Agent ID that isn't a string", agent.startSession(as(42)), INVALID_GRANT);
+		},
+	}),
+
+	check({
 		id: "sessions/ended-session",
 		title: "Tokens stop working on the next request after a session ends, and its key gets invalid_grant",
 		covers: ["signout.check-per-request", "sessions.remember-ended", "guide.session-keys"],

@@ -20,10 +20,21 @@ export type ConversationState =
 	| { status: "idle"; responder: "human" }
 	| { status: "closed"; responder: "agent" | "human" };
 
+/** Who wrote a message (spec 7.4). Only Company messages carry `id`, `name` and `image`. */
+export interface Author {
+	type: "agent" | "human";
+	/** A stable ID for the writer, so the Personal Agent can tell one writer's messages from another's. */
+	id?: string;
+	/** The writer's display name, such as "Alex". */
+	name?: string;
+	/** An HTTPS URL of the writer's picture. */
+	image?: string;
+}
+
 export interface Message {
 	id: string;
 	role: "user" | "company";
-	sender: "agent" | "human";
+	author: Author;
 	text?: string;
 	data?: Record<string, unknown>;
 	context?: Record<string, unknown>;
@@ -235,7 +246,7 @@ export class Conversations {
 		if ("ctx" in by) await this.owned(id, by.ctx);
 		const closed = await this.mutate(id, (c) => {
 			if (c.state.status === "closed") return;
-			if ("reason" in by) this.append(c, { type: "message", message: { id: randomId("msg"), role: "company", sender: "agent", text: by.reason } });
+			if ("reason" in by) this.append(c, { type: "message", message: { id: randomId("msg"), role: "company", author: { type: "agent" }, text: by.reason } });
 			this.setState(c, { status: "closed", responder: c.state.responder });
 		});
 		await this.dequeue(id);
@@ -322,10 +333,13 @@ export class Conversations {
 	}
 
 	/** A message from the person handling the conversation. */
-	async reply(id: string, text: string, extra: { data?: Record<string, unknown> } = {}): Promise<void> {
+	async reply(id: string, text: string, extra: { data?: Record<string, unknown>; author?: Omit<Author, "type"> } = {}): Promise<void> {
+		// The writer's picture is a URL the protocol exchanges, so HTTPS only (spec 3).
+		if (extra.author?.image !== undefined && URL.parse(extra.author.image)?.protocol !== "https:") throw new Error("poppyseed: author.image must be an HTTPS URL");
 		await this.mutate(id, (c) => {
 			if (c.state.status === "closed") throw closedError();
-			this.append(c, { type: "message", message: { id: randomId("msg"), role: "company", sender: "human", text, ...(extra.data ? { data: extra.data } : {}) } });
+			const author: Author = { ...extra.author, type: "human" };
+			this.append(c, { type: "message", message: { id: randomId("msg"), role: "company", author, text, ...(extra.data ? { data: extra.data } : {}) } });
 		});
 	}
 
@@ -340,7 +354,7 @@ export class Conversations {
 	async decline(id: string, reason: string): Promise<void> {
 		await this.mutate(id, (c) => {
 			if (c.state.status !== "queued") return;
-			this.append(c, { type: "message", message: { id: randomId("msg"), role: "company", sender: "agent", text: reason } });
+			this.append(c, { type: "message", message: { id: randomId("msg"), role: "company", author: { type: "agent" }, text: reason } });
 			this.setState(c, { status: "idle", responder: "agent" });
 		});
 		await this.dequeue(id);
@@ -358,7 +372,7 @@ export class Conversations {
 				this.append(cur, { type: "authorization", error: "insufficient_scope", scope });
 				const org = this.config.organization.name;
 				const text = ctx.account ? `To do that I need more access to your ${org} account.` : `To do that I need you to sign in to your ${org} account.`;
-				this.append(cur, { type: "message", message: { id: randomId("msg"), role: "company", sender: cur.state.responder, text } });
+				this.append(cur, { type: "message", message: { id: randomId("msg"), role: "company", author: { type: cur.state.responder }, text } });
 			});
 			return { kind: "authorization", error: "insufficient_scope", scope };
 		}
@@ -579,7 +593,7 @@ export class Conversations {
 	private async say(id: string, text: string, data?: Record<string, unknown>, operation?: OperationView): Promise<void> {
 		await this.mutate(id, (c) => {
 			if (c.state.status === "closed") return;
-			const message: Message = { id: randomId("msg"), role: "company", sender: "agent", text };
+			const message: Message = { id: randomId("msg"), role: "company", author: { type: "agent" }, text };
 			if (data) message.data = data;
 			if (operation && c.operations) message.operation = operation;
 			this.append(c, { type: "message", message });
@@ -592,7 +606,8 @@ function parseMessage(input: unknown): Message {
 	if (!input || typeof input !== "object" || Array.isArray(input)) throw invalidRequest("message is required");
 	const m = input as Record<string, unknown>;
 	if (typeof m.id !== "string" || !ID.test(m.id)) throw invalidRequest("message.id must be 1 to 256 characters of letters, digits, - and _");
-	if (m.sender !== "agent" && m.sender !== "human") throw invalidRequest('message.sender must be "agent" or "human"');
+	const type = m.author && typeof m.author === "object" ? (m.author as Record<string, unknown>).type : undefined;
+	if (type !== "agent" && type !== "human") throw invalidRequest('message.author.type must be "agent" or "human"');
 	const notObject = (v: unknown) => v !== undefined && (v === null || typeof v !== "object" || Array.isArray(v));
 	if (m.text !== undefined && typeof m.text !== "string") throw invalidRequest("message.text must be a string");
 	if (notObject(m.data)) throw invalidRequest("message.data must be an object");
@@ -601,7 +616,8 @@ function parseMessage(input: unknown): Message {
 	return {
 		id: m.id,
 		role: "user",
-		sender: m.sender,
+		// Only Company messages name their writer (spec 7.4), so a Personal Agent's author is its type alone.
+		author: { type },
 		...(m.text !== undefined ? { text: m.text } : {}),
 		...(m.data !== undefined ? { data: m.data as Record<string, unknown> } : {}),
 		...(m.context !== undefined ? { context: m.context as Record<string, unknown> } : {}),

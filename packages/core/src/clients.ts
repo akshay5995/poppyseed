@@ -192,9 +192,12 @@ export function parseClientMetadata(input: unknown, fetchedFrom: string): Client
 	if (!Array.isArray(redirects) || redirects.some((uri) => typeof uri !== "string")) {
 		throw invalidClient("redirect_uris must be an array of strings");
 	}
-	const host = new URL(fetchedFrom).hostname;
-	for (const uri of [obj.jwks_uri, ...redirects] as string[]) {
-		if (URL.parse(uri)?.hostname !== host) throw invalidClient("jwks_uri and redirect_uris must be URLs on the client_id domain");
+	// On the client_id's own origin scheme and host: HTTPS, except a local client_id in dev mode (spec 4.1).
+	const { protocol, hostname } = new URL(fetchedFrom);
+	const onClientDomain = (uri: string) => URL.parse(uri)?.protocol === protocol && URL.parse(uri)?.hostname === hostname;
+	if (!onClientDomain(obj.jwks_uri)) throw invalidClient("jwks_uri must be a URL on the client_id domain");
+	for (const uri of redirects as string[]) {
+		if (!onClientDomain(uri) && !isLoopbackRedirect(uri)) throw invalidClient("redirect_uris must be URLs on the client_id domain, or loopback redirect URIs (RFC 8252 §7.3)");
 	}
 	return {
 		client_id: fetchedFrom,
@@ -204,6 +207,24 @@ export function parseClientMetadata(input: unknown, fetchedFrom: string): Client
 		logo_uri: typeof obj.logo_uri === "string" ? obj.logo_uri : undefined,
 		extensions: obj.extensions && typeof obj.extensions === "object" ? (obj.extensions as Record<string, unknown>) : undefined,
 	};
+}
+
+/** A loopback redirect URI for an app on the User's computer: http on a loopback IP literal, any port (RFC 8252 §7.3). */
+function isLoopbackRedirect(uri: string): boolean {
+	const url = URL.parse(uri);
+	return url?.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "[::1]");
+}
+
+/** Whether `requested` is one of the agent's redirect URIs: exactly, or a loopback one on any port (spec 4.5, RFC 8252 §7.3). */
+export function isRegisteredRedirect(registered: string[], requested: string): boolean {
+	if (registered.includes(requested)) return true;
+	if (!isLoopbackRedirect(requested)) return false;
+	const portless = (uri: string) => {
+		const url = new URL(uri);
+		url.port = "";
+		return url.href;
+	};
+	return registered.some((uri) => isLoopbackRedirect(uri) && portless(uri) === portless(requested));
 }
 
 /** Literal loopback, private and link-local hosts. DNS rebinding needs a resolver-level guard as well. */

@@ -32,7 +32,8 @@ A Session is one User's activity at one Company through one Personal Agent, acro
 
 - **MUST** · both · `identity.client-id-url` — A Personal Agent's `client_id` is an HTTPS URL that returns its client metadata document.
 - **MUST** · both · `identity.client-id-matches` — `client_id` in the metadata document equals the URL the document was fetched from.
-- **MUST** · both · `identity.same-domain` — `jwks_uri` and every entry in `redirect_uris` are HTTPS URLs on the same domain as `client_id`, and the key set contains only public keys.
+- **MUST** · both · `identity.same-domain` — `jwks_uri` is an HTTPS URL on the same domain as `client_id`, each entry in `redirect_uris` is an HTTPS URL on that domain or a loopback redirect URI (RFC 8252 §7.3), and the key set contains only public keys.
+- **MUST** · company · `identity.loopback-redirect` — Companies accept loopback redirect URIs in `redirect_uris`, for an app on the User's computer. *(implied)*
 - **MUST** · both · `identity.private-key-jwt` — The Personal Agent authenticates at the token endpoint with a client assertion signed by a key from `jwks_uri` (`private_key_jwt`, RFC 7523); its DPoP keys are separate and unpublished. *(implied)*
 - **MUST** · both · `identity.client-assertion-aud` — The client assertion's `aud` is the Company's `auth.issuer` as a single string, and Companies reject any other `aud`, compared character for character, including their token endpoint URL.
 - **MUST** · company · `identity.client-assertion-replay` — The client assertion follows the Session assertion's rules for `iat`, `exp` and `jti`, so the Company rejects a reused `jti` from the same `client_id` until it expires. *(implied)*
@@ -49,7 +50,7 @@ POST /oauth/token
 DPoP: <proof signed with a new Session Key>
 
 grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
-&assertion=<JWT iss=client_id, sub=User ID, aud=auth.issuer, iat, exp ≤ iat+300, jti>
+&assertion=<JWT iss=client_id, sub=User ID, agent_id (optional), aud=auth.issuer, iat, exp ≤ iat+300, jti>
 &client_id=…&client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer&client_assertion=…
 ```
 
@@ -60,8 +61,13 @@ grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer
 - **MUST** · agent · `sessions.user-id-stable` — The Personal Agent gives each of its Users a stable User ID for each Company, where a Company is identified by its `auth.issuer`.
 - **MUST NOT** · agent · `sessions.user-id-no-pii` — A User ID does not contain or derive from personal information, such as an email address, phone number or name, even with a keyed hash.
 - **MUST NOT** · agent · `sessions.anonymous-no-sign-in` — A Personal Agent does not sign in with a Session that uses an anonymous browsing User ID.
-- **MUST** · agent · `sessions.user-id-confidential` — The Personal Agent keeps the mapping of each User's IDs across Companies confidential, never publishing it or sharing it with third parties other than service providers acting for it.
-- **MUST** · both · `sessions.jwt-bearer` — A Session starts with the JWT bearer grant at `token_endpoint`: a short-lived assertion signed with a key from `jwks_uri`, with `iss` the `client_id`, `sub` the User ID, `aud` the `auth.issuer` as a single string, `iat`, `exp`, and a `jti` of at least 128 random bits, plus the client assertion and a DPoP Proof signed with a new Session Key. *(implied)*
+- **MAY** · agent · `sessions.agent-id` — A Personal Agent that acts for a User through several agents may name the one a Session is for with an Agent ID, in the assertion's optional `agent_id`; one with a single agent leaves it out.
+- **MUST NOT** · agent · `sessions.agent-id-no-pii` — An Agent ID is stable, opaque and different for each Company, and does not contain or derive from personal information.
+- **MUST** · agent · `sessions.agent-id-renew` — When renewing a Session, the Personal Agent sends the same Agent ID it started with, or none if it started without one; a Session started with an Account Token has none.
+- **MAY** · company · `sessions.agent-id-use` — The Company may use the Agent ID to tell a User's agents apart, for example in account settings or for rate limits, while they share the User's account, Account Tokens and conversations.
+- **MUST** · company · `sessions.agent-id-kept` — A Session keeps the Agent ID it started with, and one started with an Account Token has none. *(implied)*
+- **MUST** · agent · `sessions.user-id-confidential` — The Personal Agent keeps the mapping of each User's IDs and Agent IDs across Companies confidential, never publishing it or sharing it with third parties other than service providers acting for it.
+- **MUST** · both · `sessions.jwt-bearer` — A Session starts with the JWT bearer grant at `token_endpoint`: a short-lived assertion signed with a key from `jwks_uri`, with `iss` the `client_id`, `sub` the User ID, an optional `agent_id`, `aud` the `auth.issuer` as a single string, `iat`, `exp`, and a `jti` of at least 128 random bits, plus the client assertion and a DPoP Proof signed with a new Session Key. *(implied)*
 - **MUST** · company · `sessions.assertion-aud` — The Company rejects a Session assertion whose `aud` is anything but its `auth.issuer`, compared character for character.
 - **MUST** · agent · `sessions.assertion-lifetime` — A Session assertion's `exp` is at most five minutes after `iat`.
 - **MUST** · company · `sessions.verify-assertions` — The Company verifies both assertions against the Personal Agent's `jwks_uri`, checks that the assertion's `iss` is the authenticated `client_id`, and rejects a `jti` it has already seen from the same `client_id` until the assertion expires.

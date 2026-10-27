@@ -73,6 +73,8 @@ export interface SignInOptions {
 	scope?: string;
 	/** The scopes to approve. Default all requested. */
 	approve?: string[];
+	/** Default the agent's own HTTPS callback. */
+	redirectUri?: string;
 }
 
 export interface SessionOptions extends Omit<SignInOptions, "scope"> {
@@ -211,7 +213,7 @@ export class Harness {
 	async signInDirect(agent: TestAgent, session: SessionKey, options: SignInOptions = {}): Promise<TokenResponse> {
 		const scope = options.scope ?? this.offered("direct").join(" ");
 		const browser = await this.browser(options.person ?? "alice");
-		const request = await agent.authorizationRequest(scope, session);
+		const request = await agent.authorizationRequest(scope, session, { redirectUri: options.redirectUri });
 		const back = await browser.decide(await browser.openConsent(request.url), "approve", options.approve);
 		const code = this.redirectParams(back, request.redirectUri).get("code");
 		this.ok(code, `approving returns a code to the redirect_uri, got ${back.headers.get("location")}`);

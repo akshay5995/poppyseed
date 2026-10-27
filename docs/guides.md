@@ -63,6 +63,11 @@ export const poppyseed = definePoppyseed({
     "trips:read": "See your trips and bookings. It doesn't let the agent change anything.",
     "trips:write": "Book, change and cancel trips, each only after you approve it.",
   },
+  // Optional: lets agents ask the person before requesting a consequential scope.
+  scopeHints: {
+    "trips:read": { changes: "none", personalData: true },
+    "trips:write": { changes: "irreversible", personalData: true },
+  },
   signIn: {
     direct: true, // the person approves in their browser
     device: true, // the person enters a code on any device
@@ -160,7 +165,7 @@ When an agent asks for a person, the conversation waits in your staff inbox:
 const inbox = poppyseed.conversations; // present, and typed so, when `conversations` is configured
 await inbox.queue(); // conversations waiting for a person
 await inbox.join(id); // responder becomes human
-await inbox.reply(id, "Hi, I'm Sam. Let me look at that booking.");
+await inbox.reply(id, "Hi, I'm Sam. Let me look at that booking.", { author: { id: "aut_sam", name: "Sam" } }); // author is optional
 await inbox.callTool(id, "my_trips", {}); // with the conversation's scopes, no more
 await inbox.release(id); // back to the Company Agent
 ```

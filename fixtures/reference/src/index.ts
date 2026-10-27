@@ -95,6 +95,11 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 			"notes:read": "See the notes saved on your account. It doesn't let the agent change anything.",
 			"notes:write": "Save notes, and exchange, ship or close things on your account. It doesn't let the agent read your notes.",
 		},
+		scopeHints: {
+			"notes:read": { changes: "none", personalData: true },
+			// Closing the account can't be undone.
+			"notes:write": { changes: "irreversible", personalData: true },
+		},
 		accounts: { current: currentPerson, signInUrl: (returnTo) => `/sign-in?return_to=${encodeURIComponent(returnTo)}` },
 		signIn: {
 			direct: true,
@@ -208,7 +213,7 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 		connections: (person) => company.connections.list(people[person].id),
 		disconnect: (person, clientId) => company.connections.disconnect(people[person].id, clientId),
 		staffJoin: (id) => conversations.join(id),
-		staffReply: (id, text) => conversations.reply(id, text),
+		staffReply: (id, text) => conversations.reply(id, text, { author: { id: "aut_sam", name: "Sam", image: `https://${domain}/staff/sam.png` } }),
 		staffCallTool: async (id, name, input) => ({ kind: (await conversations.callTool(id, name, input)).kind }),
 		lastCode: async () => lastCode,
 		performed: async (id) => performed.get(id) ?? [],

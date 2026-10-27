@@ -89,7 +89,7 @@ const response = (await poppyseed.handle(request)) ?? new Response("Not found", 
 | `claudeAgent(options)` | A Company Agent for conversations, backed by Claude. |
 | `memoryStore()`, `postgresStore(db)` | Stores for protocol state. See [Deploying](https://withpoppyseed.dev/docs/deployment). |
 | `PoppyError` | The error type behind every protocol error response. |
-| Types | `PoppyseedConfig`, `SessionContext`, `ToolDefinition`, `RunTool`, `OperationTool`, `Proposal`, `ConfirmedOperation`, `CompanyAgent`, `AgentTurn`, `Message`, `ToolResult`, `ConversationInfo`, `OperationView`, `SignedInContext`, `Connection`, `Store`, `SqlClient`, `SiteAccount`. |
+| Types | `PoppyseedConfig`, `SessionContext`, `ToolDefinition`, `RunTool`, `OperationTool`, `Proposal`, `ConfirmedOperation`, `CompanyAgent`, `AgentTurn`, `Message`, `Author`, `ScopeHint`, `ToolResult`, `ConversationInfo`, `OperationView`, `SignedInContext`, `Connection`, `Store`, `SqlClient`, `SiteAccount`. |
 
 ## What it serves
 

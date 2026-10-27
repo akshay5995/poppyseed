@@ -211,7 +211,7 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 			queue: () => conversations.queue(),
 			get: (id: string) => conversations.get(id),
 			join: (id: string) => conversations.join(id),
-			reply: (id: string, text: string, extra?: { data?: Record<string, unknown> }) => conversations.reply(id, text, extra),
+			reply: (id: string, text: string, extra?: Parameters<Conversations["reply"]>[2]) => conversations.reply(id, text, extra),
 			callTool: (id: string, name: string, input: unknown) => conversations.callTool(id, name, input),
 			release: (id: string) => conversations.release(id),
 			decline: (id: string, reason: string) => conversations.decline(id, reason),
@@ -238,6 +238,13 @@ function resolveConfig(input: PoppyseedConfig): ResolvedConfig {
 	}
 	// Direct and Device Sign-In grant any of `scopes`; Mediated Sign-In only its own (spec 4.4).
 	if (input.signIn && known.size === 0) throw new Error("poppyseed: signIn needs scopes, each with a description, for Personal Agents to request");
+	// Each hint has both fields (spec 4.4); the types say so, JavaScript callers get the same check.
+	for (const [name, hint] of Object.entries(input.scopeHints ?? {})) {
+		if (!known.has(name)) throw new Error(`poppyseed: scopeHints names unknown scope ${name}`);
+		if (!["none", "reversible", "irreversible"].includes(hint.changes) || typeof hint.personalData !== "boolean") {
+			throw new Error(`poppyseed: scopeHints.${name} needs changes ("none", "reversible" or "irreversible") and personalData (true or false)`);
+		}
+	}
 	const unknown = (input.signIn?.mediated?.scopes ?? []).filter((s) => !known.has(s));
 	if (unknown.length > 0) throw new Error(`poppyseed: signIn.mediated offers unknown scopes ${unknown.join(", ")}`);
 	if (input.excludedTasks) checkExcludedTasks(input.excludedTasks, Object.keys(input.tools ?? {}));

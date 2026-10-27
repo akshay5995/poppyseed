@@ -62,7 +62,7 @@ See the [Guides](docs/guides.md).
 
 ## Verified
 
-A conformance suite checks the spec's company-side rules over HTTP. Through a Next.js production server Poppyseed passes 104 checks and fails none; the one skipped needs a public agent URL. Each check is proven by breaking its rule on purpose. Run it against your site:
+A conformance suite checks the spec's company-side rules over HTTP. Through a Next.js production server Poppyseed passes 107 checks and fails none; the one skipped needs a public agent URL. Each check is proven by breaking its rule on purpose. Run it against your site:
 
 ```sh
 npx poppyseed check http://localhost:3000

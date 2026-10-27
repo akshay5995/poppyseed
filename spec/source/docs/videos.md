@@ -1,6 +1,6 @@
 # Video tutorials
 
-Short videos on how Personal Agent Protocol works, each a few minutes long. Start with the first, then watch the others in any order. The [specification](/docs/0.3/spec) has the details.
+Short videos on how Personal Agent Protocol works, each a few minutes long. Start with the first, then watch the others in any order. The videos can lag behind the latest version, so the [specification](/docs/0.3/spec) should always be considered the source of truth.
 
 ## What is the Personal Agent Protocol?
 
@@ -31,6 +31,18 @@ Some companies would rather let the agent handle sign-in. This video explains Me
 Personal agents can work with company agents to quickly perform actions and fix problems on behalf of their users. This video covers how they exchange messages, how an agent keeps up with replies, and when it needs to check back with the user.
 
 [Watch the video](https://personalagentprotocol.org/docs/videos#conversations)
+
+## Agent-to-MCP communication
+
+Personal agents can communicate with MCP servers that companies may have already set up to work with AI tools. This video explains how that connection is established and how communication works.
+
+[Watch the video](https://personalagentprotocol.org/docs/videos#mcp)
+
+## Agent-to-website browsing
+
+Some companies may not have agents, API endpoints, or MCP servers for a personal agent to talk to, but almost all of them have a website. Let's find out how an agent can browse a website on behalf of a user in this video.
+
+[Watch the video](https://personalagentprotocol.org/docs/videos#browsing)
 
 ---
 

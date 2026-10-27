@@ -9,6 +9,14 @@ export const PROTOCOL_VERSION = "0.3";
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 /** Who is calling a tool or protected route. Never contains tokens. */
+/** A scope's hints in `auth.scope_hints` (spec 4.4). */
+export interface ScopeHint {
+	/** `none` if nothing changes, `reversible` if every change can be undone, `irreversible` if any can't, such as paying or cancelling. */
+	changes: "none" | "reversible" | "irreversible";
+	/** Whether any operation shows or changes the User's personal data, such as addresses or payment methods. */
+	personalData: boolean;
+}
+
 export interface SessionContext {
 	/** Names the Session: the thumbprint of its Session Key (spec 4.3). */
 	sessionId: string;
@@ -16,6 +24,8 @@ export interface SessionContext {
 	clientId: string;
 	/** The opaque User ID the Personal Agent uses for this person at your company. */
 	userId: string;
+	/** Which of the Personal Agent's agents the Session is for, when it names one (spec 4.2). Its agents share the account. */
+	agentId?: string;
 	/** Your own account id and the scopes this request carries, or null while signed out. */
 	account: { id: string; scopes: string[] } | null;
 }
@@ -183,6 +193,13 @@ interface BaseConfig {
 	 * Names must not start with `poppy:`.
 	 */
 	scopes?: Record<string, string>;
+	/**
+	 * Hints about what each scope allows, judged by its most consequential
+	 * operation (spec 4.4): whether that operation changes anything and can be
+	 * undone, and whether it shows or changes personal data. Leave a scope out
+	 * rather than guess.
+	 */
+	scopeHints?: Record<string, ScopeHint>;
 	/** Tasks you chose not to offer through the protocol, so Personal Agents tell the User right away (spec 8.1). */
 	excludedTasks?: ExcludedTask[];
 	/** Receives reports of tasks Personal Agents couldn't do (spec 8.3). Return an alternative when the task can be done after all. */

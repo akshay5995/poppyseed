@@ -1,4 +1,4 @@
-import type { ClientMetadata, ClientRegistry } from "./clients.ts";
+import { isRegisteredRedirect, type ClientMetadata, type ClientRegistry } from "./clients.ts";
 import { PoppyError } from "./errors.ts";
 import { esc, found, page, readCookie } from "./html.ts";
 import { readForm, requestedScopes, type AuthCodeRecord, type DeviceRecord } from "./oauth.ts";
@@ -39,7 +39,7 @@ export async function authorizeEndpoint(request: Request, config: ResolvedConfig
 	const client = await clients.load(clientId).catch(() => undefined);
 	const invalidLink = (why: string) => page(config, 400, "This sign-in link isn't valid", `<p>${why} Go back to it and try again.</p>`);
 	if (!client) return invalidLink("The personal agent that sent you here couldn't be verified.");
-	if (!client.meta.redirect_uris.includes(redirectUri)) {
+	if (!isRegisteredRedirect(client.meta.redirect_uris, redirectUri)) {
 		return invalidLink("The personal agent asked to return you to an address it hasn't registered.");
 	}
 	const state = params.get("state") ?? undefined;

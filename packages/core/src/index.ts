@@ -7,7 +7,7 @@ export { PoppyError, ToolError } from "./errors.ts";
 export { OperationFailed, type OperationResult, type OperationView } from "./operations.ts";
 export type { ToolInfo, ToolResult } from "./tools.ts";
 export { claudeAgent, type ClaudeAgentOptions } from "./claude.ts";
-export type { AgentTurn, CompanyAgent, ConversationInfo, ConversationsConfig, ConversationState, Message } from "./conversations.ts";
+export type { AgentTurn, Author, CompanyAgent, ConversationInfo, ConversationsConfig, ConversationState, Message } from "./conversations.ts";
 export {
 	MCP_PROTOCOL_VERSION,
 	PROTOCOL_VERSION,
@@ -18,6 +18,7 @@ export {
 	type PoppyseedConfig,
 	type Proposal,
 	type RunTool,
+	type ScopeHint,
 	type SessionContext,
 	type SignedInContext,
 	type SignIn,

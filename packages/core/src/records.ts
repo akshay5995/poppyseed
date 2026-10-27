@@ -15,6 +15,8 @@ export interface SessionRecord {
 	id: string;
 	clientId: string;
 	userId: string;
+	/** The agent the Session started for, if the assertion named one; it never changes (spec 4.2). */
+	agentId?: string;
 	expiresAt: number;
 	/**
 	 * The account the Session is bound to once it first signs in. A Session
@@ -80,7 +82,7 @@ export async function loadSession(store: Store, id: string, owner: { clientId: s
  * owner, a new one for a key never seen, and invalid_grant for anyone else's
  * Session or a Session that has ended.
  */
-export async function sessionFor(store: Store, jkt: string, owner: { clientId: string; userId: string }, ttlMs: number): Promise<SessionRecord> {
+export async function sessionFor(store: Store, jkt: string, owner: { clientId: string; userId: string }, ttlMs: number, agentId?: string): Promise<SessionRecord> {
 	const mine = (session: SessionRecord | undefined) => {
 		if (session && (session.clientId !== owner.clientId || session.userId !== owner.userId)) throw invalidGrant("the Session Key names a Session of a different Personal Agent or User");
 		return session;
@@ -94,7 +96,7 @@ export async function sessionFor(store: Store, jkt: string, owner: { clientId: s
 		if (created) return created;
 		throw invalidGrant("the Session has ended; start a new Session with a new key");
 	}
-	const session: SessionRecord = { id: jkt, ...owner, expiresAt: Date.now() + ttlMs, account: null };
+	const session: SessionRecord = { id: jkt, ...owner, ...(agentId ? { agentId } : {}), expiresAt: Date.now() + ttlMs, account: null };
 	await store.set(key.session(jkt), session, { expiresAt: session.expiresAt });
 	return session;
 }

@@ -32,4 +32,4 @@ Areas the draft doesn't cover yet are listed in [path-to-1.md](../source/docs/pa
 
 `pnpm spec:check` fails when `spec/source/SHA256SUMS` no longer matches this hash, which means the official text changed after these files were last reconciled with it:
 
-<!-- reconciled-sha256: 3f1d4e122b4769cfd227e5da1f3f374a25a6aa3bb27f5e6499a35a5dcc37fdce -->
+<!-- reconciled-sha256: 1b0dc54169a97ee6721899e70b1632da811a7c864db380062e418a1d9617de61 -->

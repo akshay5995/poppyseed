@@ -137,9 +137,12 @@ async function jwtBearer({ form, client, config, clients, sealer, bind }: GrantR
 	const assertion = form.get("assertion");
 	if (!assertion) throw invalidRequest("assertion is required");
 	const clientId = client.meta.client_id;
-	const { sub: userId } = await clients.verifyAssertion(assertion, clientId, "user");
+	const { sub: userId, agent_id: agentId } = await clients.verifyAssertion(assertion, clientId, "user");
+	if (agentId !== undefined && (typeof agentId !== "string" || !agentId || agentId.length > 256)) throw invalidGrant("agent_id must be a string of 1 to 256 characters");
 	const binding = await bind();
-	const session = await sessionFor(config.store, binding.jkt, { clientId, userId }, config.ttl.session * 1000);
+	const session = await sessionFor(config.store, binding.jkt, { clientId, userId }, config.ttl.session * 1000, agentId);
+	// A Session keeps the Agent ID it started with, and one started with an Account Token has none (spec 4.2).
+	if (session.agentId !== agentId) throw invalidGrant("a Session keeps the Agent ID it started with; renew it with the same agent_id, or none");
 	return tokenBody(config, sealer, session, binding, null);
 }
 
