@@ -1,6 +1,6 @@
 # Quickstart
 
-Five minutes to a Next.js app that personal agents can discover and call. You need Node 20.9+ and a Next.js 15 or 16 App Router app.
+Five minutes to a Next.js app that personal agents can discover and call. You need Node 22.11+ and a Next.js 15 or 16 App Router app.
 
 > Using a coding agent? Copy the prompt on [withpoppyseed.dev](https://withpoppyseed.dev) and paste it in.
 
