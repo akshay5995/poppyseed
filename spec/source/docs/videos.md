@@ -1,6 +1,6 @@
 # Video tutorials
 
-Short videos on how Personal Agent Protocol works, each a few minutes long. Start with the first, then watch the others in any order. The videos can lag behind the latest version, so the [specification](/docs/0.3/spec) should always be considered the source of truth.
+Short videos on how Personal Agent Protocol works, each a few minutes long. Start with the first, then watch the others in any order. The videos can lag behind the latest version, so the [specification](/docs/0.4/spec) should always be considered the source of truth.
 
 ## What is the Personal Agent Protocol?
 
