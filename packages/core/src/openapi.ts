@@ -1,7 +1,7 @@
 import { PoppyError } from "./errors.ts";
 import type { Guarded } from "./guard.ts";
 import { parseStrict } from "./json.ts";
-import { OPERATION_STATES } from "./operations.ts";
+import { parseApproval } from "./operations.ts";
 import { PATHS } from "./paths.js";
 import { secretHash } from "./records.ts";
 import type { Store } from "./store.ts";
@@ -13,24 +13,19 @@ const IDEMPOTENCY_MS = 86_400_000;
 
 const OPERATION_SCHEMA = {
 	type: "object",
-	required: ["operation_id", "revision", "state", "summary", "confirmation", "result"],
+	required: ["operation_id", "revision", "terms", "expires_at"],
 	properties: {
 		operation_id: { type: "string" },
-		revision: { type: "integer", minimum: 1 },
-		state: { enum: OPERATION_STATES },
+		revision: { type: "string" },
 		summary: { type: "string" },
 		terms: { type: "object" },
 		expires_at: { type: "string", format: "date-time" },
-		user_approval_required: { type: "boolean" },
-		url: { type: "string", format: "uri" },
-		confirmation: { type: ["object", "null"] },
-		result: { type: ["object", "null"] },
 	},
 };
 
 /**
- * The OpenAPI 3.1 description of your tools (spec 6). Each tool is one
- * operation, called with a DPoP Session Token: POST {tools}/{name}.
+ * The OpenAPI 3.1 description of your tools (spec 7). Each tool is one
+ * operation, called with Poppy-Session: POST {tools}/{name}.
  */
 export function openApiDocument(config: ResolvedConfig, tools: Tools): Record<string, unknown> {
 	const paths: Record<string, unknown> = {};
@@ -38,7 +33,7 @@ export function openApiDocument(config: ResolvedConfig, tools: Tools): Record<st
 		const name = tool.name;
 		const access = tool.scope ? `Requires a Session signed in with the \`${tool.scope}\` scope: ${config.scopes[tool.scope] ?? tool.scope}.` : "Works for any Session, signed in or not.";
 		const proposes = tool.proposesOperation
-			? " Returns an operation (operations extension) with HTTP 202: nothing happens until it is confirmed at the operations endpoint."
+			? " Returns HTTP 403 approval_required with the operation; retry the same request with Poppy-Approval."
 			: "";
 		paths[`${PATHS.tools}/${name}`] = {
 			post: {
@@ -52,17 +47,29 @@ export function openApiDocument(config: ResolvedConfig, tools: Tools): Record<st
 				responses: {
 					...(tool.proposesOperation
 						? {
-								"202": {
-									description: "The proposed operation",
-									content: { "application/json": { schema: { type: "object", required: ["operation"], properties: { operation: { $ref: "#/components/schemas/Operation" } } } } },
+								"403": {
+									description: "approval_required with the operation, approval_declined, insufficient_scope, or extension_required (JSON body)",
+									content: {
+										"application/json": {
+											schema: {
+												type: "object",
+												required: ["error"],
+												properties: {
+													error: { type: "string" },
+													operation: { $ref: "#/components/schemas/Operation" },
+													extension: { type: "string" },
+												},
+											},
+										},
+									},
 								},
-								"403": { description: "insufficient_scope, or extension_required for agents without the operations extension, in WWW-Authenticate" },
 							}
 						: { "403": { description: "insufficient_scope, in WWW-Authenticate" } }),
 					"200": { description: "The tool's result", content: { "application/json": { schema: {} } } },
 					"400": { description: "The input is invalid", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
 					"401": { description: "invalid_token, invalid_dpop_proof or use_dpop_nonce, in WWW-Authenticate" },
 					"422": { description: "The tool could not do it; error_description says why", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+					"503": { description: "The approved action is still running; Retry-After" },
 				},
 			},
 		};
@@ -81,7 +88,7 @@ export function openApiDocument(config: ResolvedConfig, tools: Tools): Record<st
 				session: {
 					type: "http",
 					scheme: "DPoP",
-					description: "A Personal Agent Protocol Session Token with a DPoP proof (RFC 9449). Get one from the token_endpoint in /.well-known/oauth-authorization-server.",
+					description: "A Personal Agent Protocol Session with Poppy-Session (and an access token when signed in).",
 				},
 			},
 			parameters: {
@@ -102,7 +109,7 @@ export function openApiDocument(config: ResolvedConfig, tools: Tools): Record<st
 	};
 }
 
-/** The operations endpoint, described alongside the tools (operations extension 5 to 7). */
+/** The operations endpoint for reading an operation by id. */
 function operationPaths(): Record<string, unknown> {
 	const base = PATHS.operations;
 	const id = { name: "operation_id", in: "path", required: true, schema: { type: "string" } };
@@ -110,28 +117,6 @@ function operationPaths(): Record<string, unknown> {
 	const notFound = { description: "operation_not_found", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } };
 	return {
 		[`${base}/{operation_id}`]: { get: { operationId: "getOperation", summary: "Read an operation", parameters: [id], security: [{ session: [] }], responses: { "200": op, "404": notFound } } },
-		[`${base}/{operation_id}/confirm`]: {
-			post: {
-				operationId: "confirmOperation",
-				summary: "Confirm the revision the User approved",
-				parameters: [id],
-				security: [{ session: [] }],
-				requestBody: {
-					required: true,
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								required: ["revision", "approved_by"],
-								properties: { revision: { type: "integer" }, approved_by: { enum: ["user", "standing_permission"] } },
-							},
-						},
-					},
-				},
-				responses: { "200": op, "403": { description: "user_approval_required, or a scope error" }, "404": notFound, "409": { description: "terms_changed, with the current operation" } },
-			},
-		},
-		[`${base}/{operation_id}/cancel`]: { post: { operationId: "cancelOperation", summary: "Decline or stop an operation", parameters: [id], security: [{ session: [] }], responses: { "200": op, "404": notFound } } },
 	};
 }
 
@@ -144,32 +129,39 @@ const ERRORS = {
 	extension_required: [403, "extension_required"],
 } as const;
 
-/** POST {tools}/{name}: one tool call over plain HTTP with a DPoP Session Token, with Idempotency-Key support. */
+/** POST {tools}/{name}: one tool call with Poppy-Session, with Idempotency-Key support. */
 export async function toolCallEndpoint(request: Request, store: Store, tools: Tools, auth: Guarded, name: string): Promise<Response> {
 	const raw = await request.text();
 	const input = parseStrict(raw);
-	const call = async (): Promise<{ status: number; body: unknown }> => {
-		const result = await tools.run(name, input, auth);
-		if (result.kind === "output") return { status: 200, body: result.output ?? null };
-		if (result.kind === "operation") return { status: 202, body: { operation: result.operation } };
+	const approval = parseApproval(request.headers.get("poppy-approval"));
+	const call = async (): Promise<{ status: number; body: unknown; headers?: Record<string, string> }> => {
+		const result = await tools.run(name, input, auth, approval);
+		if (result.kind === "output") return { status: result.status ?? 200, body: result.output ?? null, headers: result.headers };
+		if (result.kind === "operation") return { status: 403, body: { error: "approval_required", operation: result.operation } };
+		if (result.kind === "declined") {
+			return {
+				status: 403,
+				body: { error: "approval_declined", operation_id: result.operation_id, revision: result.revision, ...(result.reason ? { reason: result.reason } : {}) },
+			};
+		}
+		if (result.kind === "busy") return { status: 503, body: { error: "temporarily_unavailable" }, headers: { "retry-after": String(result.retryAfter) } };
 		if (result.kind === "authorization") throw new Error("unreachable: APIs answer missing scopes with a challenge");
 		const [status, error] = ERRORS[result.code];
 		return { status, body: { error, error_description: result.message, ...(result.code === "extension_required" ? { extension: "operations" } : {}) } };
 	};
 	const key = request.headers.get("idempotency-key");
 	const outcome = key ? await idempotent(store, `idempotency:${auth.ctx.sessionId}:${name}:${key}`, await secretHash(raw), call) : await call();
-	// At APIs, extension_required goes in WWW-Authenticate like the other token errors (spec 3.3).
-	const refused = (outcome.body as { error?: unknown } | null)?.error === "extension_required";
-	return json(outcome.body, outcome.status, { "cache-control": "no-store", ...(refused ? { "www-authenticate": 'DPoP error="extension_required", extension="operations"' } : {}) });
+	// extension_required and approval_required are JSON bodies, not WWW-Authenticate (spec 3.3, ops 4).
+	return json(outcome.body, outcome.status, { "cache-control": "no-store", ...outcome.headers });
 }
 
 interface IdempotencyRecord {
 	hash: string;
-	response: { status: number; body: unknown } | null;
+	response: { status: number; body: unknown; headers?: Record<string, string> } | null;
 }
 
 /** Runs `call` once per key and Session; a retry gets the stored response (guide: Idempotency-Key). */
-async function idempotent(store: Store, storeKey: string, hash: string, call: () => Promise<{ status: number; body: unknown }>) {
+async function idempotent(store: Store, storeKey: string, hash: string, call: () => Promise<{ status: number; body: unknown; headers?: Record<string, string> }>) {
 	const expiresAt = Date.now() + IDEMPOTENCY_MS;
 	if (!(await store.add<IdempotencyRecord>(storeKey, { hash, response: null }, { expiresAt }))) {
 		const seen = await store.get<IdempotencyRecord>(storeKey);
@@ -182,7 +174,6 @@ async function idempotent(store: Store, storeKey: string, hash: string, call: ()
 		await store.set<IdempotencyRecord>(storeKey, { hash, response }, { expiresAt });
 		return response;
 	} catch (error) {
-		// Protocol errors (a scope challenge) aren't results; let the retry run again.
 		await store.delete(storeKey);
 		throw error;
 	}
