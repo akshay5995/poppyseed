@@ -1,36 +1,66 @@
 import { check } from "../check.ts";
 import type { Harness } from "../harness.ts";
 
-const INVALID_GRANT = { status: 400, error: "invalid_grant" };
+const INVALID_SESSION = { status: 400, error: "invalid_session" };
+const SESSION_ENDED = { status: 400, error: "session_ended" };
 
 export const sessionChecks = [
 	check({
-		id: "sessions/start-signed-out",
-		title: "The JWT-bearer grant starts a signed-out session with a DPoP token and no scope",
-		covers: ["sessions.jwt-bearer", "sessions.response", "sessions.expires-in", "sessions.token-hours"],
+		id: "sessions/header",
+		title: "Signed-out requests carry Poppy-Session and Poppy-Version; a known sid with another User ID is a new Session",
+		covers: ["sessions.signed-session-header", "session.failed-session-check", "session.company-reject-request", "session.personal-agent-send"],
 		leg: 1,
 		async run(t: Harness) {
-			const { token } = await t.session();
-			t.equal(token.token_type, "DPoP", "token_type");
-			t.equal(token.scope, undefined, "scope of a signed-out session");
-			t.ok(typeof token.access_token === "string" && token.access_token.length > 0, "access_token is a non-empty string");
-			t.ok(token.expires_in > 0, `expires_in is greater than 0, got ${token.expires_in}`);
-			t.ok(token.expires_in <= 24 * 3600, `session tokens last hours, not days: expires_in is ${token.expires_in}s`);
-			for (const member of ["session_id", "signed_in"]) t.ok(!(member in token), `the response has no ${member}: the Session Key names the Session`);
+			const agent = await t.agent();
+			const tool = t.profile("publicTool");
+			const sid = `sid_${crypto.randomUUID().replace(/-/g, "")}`;
+			const first = await agent.startSession({ sid, userId: "usr_header_one" });
+			// Signed-out tool call: Poppy-Session + Poppy-Version, no Authorization.
+			await t.toolOk(agent, first, tool, "signed-out tool with Poppy-Session and Poppy-Version");
+
+			const url = await t.openApiOperation(tool.name);
+			const withoutSession = await t.target.fetch(url, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"poppy-version": "0.4",
+					authorization: "DPoP pst1.old-session-token-without-poppy-session",
+				},
+				body: JSON.stringify(tool.arguments),
+			});
+			await t.refusedResponse("Authorization: DPoP without Poppy-Session", withoutSession, INVALID_SESSION);
+
+			// A known sid with a different User ID is a different Session, not invalid_session.
+			const second = await agent.startSession({ sid, userId: "usr_header_two" });
+			await t.toolOk(agent, second, tool, "same sid with a different sub starts a new Session");
+		},
+	}),
+
+	check({
+		id: "sessions/start-signed-out",
+		title: "The first request with a new sid starts a signed-out Session; no access token is required",
+		covers: ["sessions.signed-session-header", "session.personal-agent-send"],
+		leg: 1,
+		async run(t: Harness) {
+			const { agent, session } = await t.session();
+			t.ok(typeof session.sid === "string" && session.sid.length > 0, "sid is a non-empty string");
+			t.ok(typeof session.userId === "string" && session.userId.length > 0, "userId is a non-empty string");
+			t.ok(typeof session.delegation === "string" && session.delegation.length > 0, "the Session has a delegation");
+			await t.toolOk(agent, session, t.profile("publicTool"), "a signed-out Session reaches a public tool");
+			await t.toolRefused(agent, session, t.profile("scopedTool"), "insufficient_scope", "a signed-out Session at a scoped tool");
 		},
 	}),
 
 	check({
 		id: "sessions/token-opaque",
-		title: "A Session Token doesn't reveal the Session, agent or User it was issued for",
-		covers: ["sessions.embedded-encrypted"],
+		title: "An access token doesn't reveal the Session, agent or User it was issued for",
+		covers: ["refresh.refresh-token-tied", "tokens.personal-agent-dpop"],
 		leg: 1,
 		async run(t: Harness) {
-			const { agent, token } = await t.session();
-			// Every reading an agent could try: the token as is, and each part base64url-decoded.
+			const { agent, session, token } = await t.session({ signIn: true });
 			const readings = [token.access_token, ...token.access_token.split(/[.~]/).map((part) => Buffer.from(part, "base64url").toString("latin1"))];
-			for (const secret of [token.session.jkt, agent.clientId, agent.userId]) {
-				t.ok(!readings.some((text) => text.includes(secret)), `the token reveals ${secret}`);
+			for (const secret of [session.jkt, session.sid, agent.clientId, agent.userId]) {
+				t.ok(!readings.some((text) => text.includes(secret)), `the access token reveals ${secret}`);
 			}
 		},
 	}),
@@ -38,14 +68,14 @@ export const sessionChecks = [
 	check({
 		id: "sessions/token-response-not-cached",
 		title: "Token responses are marked no-store",
-		covers: ["guide.no-store"],
+		covers: ["guide.send-cache-control"],
 		leg: 1,
 		async run(t: Harness) {
-			const agent = await t.agent();
-			const { response } = await agent.tokenRequest({
-				grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-				assertion: await agent.signAssertion(agent.userId, agent.company.metadata.issuer),
-			});
+			const { agent, token } = await t.session({ signIn: true });
+			const { response } = await agent.tokenRequest(
+				{ grant_type: "refresh_token", refresh_token: token.refresh_token },
+				{ session: token.session },
+			);
 			t.equal(response.status, 200, "token request status");
 			t.ok(response.headers.get("cache-control")?.includes("no-store"), "Cache-Control includes no-store");
 		},
@@ -53,78 +83,101 @@ export const sessionChecks = [
 
 	check({
 		id: "sessions/renew-same-owner",
-		title: "A proof from the same Session Key renews that Session for its own agent and user, and for nobody else",
-		covers: ["sessions.renew-same-owner", "sessions.errors", "dpop.session-key-names"],
+		title: "A Session continues for its own agent and User; another User ID with the same sid is a new Session",
+		covers: ["session.send-same-agent", "session.failed-session-check"],
 		leg: 1,
 		async run(t: Harness) {
-			const { agent, token } = await t.session({ signIn: true });
+			const { agent, session, token } = await t.session({ signIn: true });
 			const scoped = t.profile("scopedTool");
-			// A signed-in Session renewed with the assertion gets a signed-out token for the same Session.
-			const renewed = await agent.startSession({ session: token.session });
-			t.equal(renewed.scope, undefined, "a renewal with the assertion is signed out");
-			await t.toolRefused(agent, renewed.access_token, scoped, "insufficient_scope", "the renewed signed-out token");
-			// The same Session, still signed in, so its earlier signed-in token keeps working.
-			await t.toolOk(agent, token.access_token, scoped, "the earlier signed-in token of the same Session");
+			await t.toolOk(agent, session, scoped, "the signed-in Session", token.access_token);
 
-			await t.refused("renewal by the same agent for another user", agent.startSession({ session: token.session, assertion: { subject: "usr_someone_else_entirely" } }), INVALID_GRANT);
+			// Signed out on the same sid: still that Session, no access token.
+			await t.toolOk(agent, session, t.profile("publicTool"), "the same Session signed out");
+			await t.toolRefused(agent, session, scoped, "insufficient_scope", "the same Session signed out at a scoped tool");
+
+			const otherUser = await agent.startSession({ sid: session.sid, userId: "usr_someone_else_entirely" });
+			await t.toolOk(agent, otherUser, t.profile("publicTool"), "same sid with another User ID is a new Session");
+
 			const other = await t.agent();
-			// Agents choose their own User identifiers, so claim the same one.
-			await t.refused("renewal by another agent", other.startSession({ session: token.session, assertion: { subject: agent.userId } }), INVALID_GRANT);
+			const otherAgent = await other.startSession({ sid: session.sid, userId: session.userId });
+			await t.toolOk(other, otherAgent, t.profile("publicTool"), "another agent with the same sid and User ID is its own Session");
 		},
 	}),
 
 	check({
 		id: "sessions/agent-id",
-		title: "A Session keeps the Agent ID it started with: a renewal naming another agent, or none, is refused",
-		covers: ["sessions.agent-id-kept"],
+		title: "A Session keeps the Agent ID it started with across Session JWTs",
+		covers: ["session.send-same-agent", "sessions.agent-name-separate"],
 		leg: 1,
 		async run(t: Harness) {
 			const agent = await t.agent();
-			const as = (agentId?: unknown) => ({ assertion: agentId === undefined ? {} : { claims: { agent_id: agentId } } });
-			const travel = await agent.startSession(as("agt_travel"));
-			const renewed = await agent.startSession({ session: travel.session, ...as("agt_travel") });
-			t.ok(renewed.access_token, "a renewal with the same Agent ID");
-			await t.refused("a renewal naming another agent", agent.startSession({ session: travel.session, ...as("agt_shopping") }), INVALID_GRANT);
-			await t.refused("a renewal with no Agent ID", agent.startSession({ session: travel.session }), INVALID_GRANT);
-			// A Session that started without one can't take one on later.
+			const tool = t.profile("publicTool");
+			const travel = await agent.startSession({ agentId: "agt_travel" });
+			await t.toolOk(agent, travel, tool, "a Session that started with an Agent ID");
+
+			// Same sid and User ID with a different agent_id must be refused (spec 5.2).
+			const renamed = { ...travel, agentId: "agt_shopping" };
+			await t.refusedResponse(
+				"a later Session JWT naming another agent",
+				await agent.sessionJson(await t.openApiOperation(tool.name), renamed, tool.arguments, { accessToken: null }),
+				INVALID_SESSION,
+			);
+			await t.refusedResponse(
+				"a later Session JWT with no Agent ID",
+				await agent.sessionJson(await t.openApiOperation(tool.name), { ...travel, agentId: undefined }, tool.arguments, {
+					accessToken: null,
+					sessionJwt: { agentId: null },
+				}),
+				INVALID_SESSION,
+			);
+
 			const plain = await agent.startSession();
-			await t.refused("naming an agent when renewing a Session that had none", agent.startSession({ session: plain.session, ...as("agt_travel") }), INVALID_GRANT);
-			await t.refused("an Agent ID that isn't a string", agent.startSession(as(42)), INVALID_GRANT);
+			await t.toolOk(agent, plain, tool, "a Session that started without an Agent ID");
+			await t.refusedResponse(
+				"naming an agent when the Session had none",
+				await agent.sessionJson(await t.openApiOperation(tool.name), { ...plain, agentId: "agt_travel" }, tool.arguments, { accessToken: null }),
+				INVALID_SESSION,
+			);
 		},
 	}),
 
 	check({
 		id: "sessions/ended-session",
-		title: "Tokens stop working on the next request after a session ends, and its key gets invalid_grant",
-		covers: ["signout.check-per-request", "sessions.remember-ended", "guide.session-keys"],
+		title: "Requests stop working after a Session ends, and get session_ended",
+		covers: ["signout.request-remembered-ended", "session.failed-session-check", "guide.remember-sessions-answer"],
 		leg: 1,
 		async run(t: Harness) {
 			const endSession = t.hook("endSession");
-			const session = await t.session();
+			const { agent, session } = await t.session();
 			const tool = t.profile("publicTool");
-			await t.toolOk(session.agent, session.token.access_token, tool, "the token before the Session ends");
-			await endSession(session.token.session.jkt);
-			await t.refusedResponse("an API call after the session ended", await t.callTool(session.agent, session.token.access_token, tool), { status: 401, challenge: 'error="invalid_token"' });
-			await t.refused("renewing an ended session with its key", session.agent.startSession({ session: session.token.session }), INVALID_GRANT);
+			await t.toolOk(agent, session, tool, "the Session before it ends");
+			await endSession(session.sid);
+			await t.refusedResponse("an API call after the Session ended", await t.callTool(agent, session, tool), SESSION_ENDED);
 		},
 	}),
 
 	check({
 		id: "sessions/assertion-aud",
-		title: "Session assertions are addressed to the issuer, never to the token endpoint, and live at most five minutes",
-		covers: ["sessions.assertion-aud", "sessions.jwt-bearer"],
+		title: "Session JWTs are addressed to the issuer, never to an endpoint",
+		covers: ["session.company-identifier-single", "session.issuer-present-https", "session.failed-session-check"],
 		leg: 1,
 		async run(t: Harness) {
-			const agent = await t.agent();
+			const { agent, session } = await t.session();
+			const tool = t.profile("publicTool");
+			const url = await t.openApiOperation(tool.name);
 			const { issuer, token_endpoint } = agent.company.metadata;
 			for (const [label, audience] of [
 				["the token endpoint", token_endpoint],
 				["the issuer with a trailing slash", `${issuer}/`],
 				["the issuer in another case", issuer.toUpperCase()],
 			] as const) {
-				await t.refused(`a Session assertion whose aud is ${label}`, agent.startSession({ assertion: { audience } }), INVALID_GRANT);
+				await t.refusedResponse(
+					`a Session JWT whose aud is ${label}`,
+					await agent.sessionJson(url, session, tool.arguments, { accessToken: null, sessionJwt: { aud: audience } }),
+					INVALID_SESSION,
+				);
 			}
-			await agent.startSession({ assertion: { lifetime: 290 } });
+			await t.toolOk(agent, session, tool, "a Session JWT addressed to the issuer");
 		},
 	}),
 ];
