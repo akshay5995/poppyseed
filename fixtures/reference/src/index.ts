@@ -184,7 +184,14 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 		],
 		// A report of a task the company does offer gets an alternative; the rest are noted.
 		feedback: ({ task }) => (/\b(write|save|add)\b.*\bnote/i.test(task) ? { instructions: "Notes are saved with the write_note tool.", references: [{ tool: "write_note" }] } : undefined),
-		conversations: { agent: scripted, handoff: { available: () => true }, retainEvents: 30, maxWait: 5 },
+		conversations: {
+			agent: scripted,
+			handoff: { available: () => true },
+			retainEvents: 30,
+			maxWait: 5,
+			disclosures: { items: [{ text: "Reference Company may use this conversation to improve its agent." }] },
+			links: { items: [{ url: `https://${domain}/help`, title: "Help centre" }] },
+		},
 	});
 
 	const { conversations } = company;
@@ -193,11 +200,10 @@ export function referenceCompany(options: ReferenceOptions): Reference {
 	const site = async (request: Request) => {
 		const confirm = /^\/operations\/([\w-]+)\/confirm$/.exec(new URL(request.url).pathname);
 		if (confirm && request.method === "POST") {
-			// The website's confirm button: the same operation the agent sees, for the browser's Session.
 			const session = await company.browserSession(request);
 			if (!session) return new Response("no agent Session in this browser", { status: 401 });
-			const revision = Number((await request.formData()).get("revision"));
-			return Response.json(await company.operations.confirm(confirm[1]!, session, revision));
+			// Same exchange the operations checks drive; website path asks for approval then performs once.
+			return company.operations.websiteAction(session, "exchange_item", { item: "itm_web", size: "M" }, { operationId: confirm[1] });
 		}
 		if (new URL(request.url).pathname !== "/account") return new Response("not found", { status: 404 });
 		// The Session's cookie wins over the site's own sign-in while the browser carries it (spec 5).

@@ -2,6 +2,7 @@ import type { Check } from "../check.ts";
 import { accountChecks } from "./accounts.ts";
 import { apiChecks } from "./apis.ts";
 import { conversationChecks } from "./conversations.ts";
+import { extensionChecks } from "./extensions.ts";
 import { hardeningChecks } from "./hardening.ts";
 import { mediatedChecks } from "./mediated.ts";
 import { webChecks } from "./web.ts";
@@ -15,4 +16,20 @@ import { signInChecks } from "./signin.ts";
 import { taskChecks } from "./tasks.ts";
 
 /** Every check, in report order. Add new files here. */
-export const checks: Check[] = [...discoveryChecks, ...identityChecks, ...sessionChecks, ...dpopChecks, ...mcpChecks, ...apiChecks, ...signInChecks, ...accountChecks, ...operationChecks, ...conversationChecks, ...webChecks, ...mediatedChecks, ...taskChecks, ...hardeningChecks];
+export const checks: Check[] = [
+	...discoveryChecks,
+	...identityChecks,
+	...sessionChecks,
+	...dpopChecks,
+	...mcpChecks,
+	...apiChecks,
+	...signInChecks,
+	...accountChecks,
+	...operationChecks,
+	...conversationChecks,
+	...extensionChecks,
+	...webChecks,
+	...mediatedChecks,
+	...taskChecks,
+	...hardeningChecks,
+];
