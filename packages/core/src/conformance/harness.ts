@@ -222,8 +222,9 @@ export class Harness {
 	 */
 	offered(type: "direct" | "device"): string[] {
 		const grant = type === "direct" ? "authorization_code" : "urn:ietf:params:oauth:grant-type:device_code";
-		const { grant_types_supported: grants = [], scopes_supported: scopes = [] } = this.company.metadata;
-		if (!grants.includes(grant) || scopes.length === 0) this.skip(`the company does not offer ${type === "direct" ? "Direct" : "Device"} Sign-In`);
+		const grants: string[] = this.company.metadata.grant_types_supported;
+		const scopes: string[] = this.company.metadata.scopes_supported ?? [];
+		if (!grants.some((g) => g === grant) || scopes.length === 0) this.skip(`the company does not offer ${type === "direct" ? "Direct" : "Device"} Sign-In`);
 		return scopes;
 	}
 

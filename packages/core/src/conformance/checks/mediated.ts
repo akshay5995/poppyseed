@@ -32,10 +32,10 @@ export const mediatedChecks = [
 		leg: 5,
 		async run(t: Harness) {
 			const { agent, session, credentials, scope, ext } = await mediated(t);
-			const grants = agent.company.metadata.grant_types_supported ?? [];
-			t.ok(grants.includes(MEDIATED_GRANT), `grant_types_supported lists ${MEDIATED_GRANT}`);
+			const grants: string[] = agent.company.metadata.grant_types_supported;
+			t.ok(grants.some((g) => g === MEDIATED_GRANT), `grant_types_supported lists ${MEDIATED_GRANT}`);
 			t.ok(ext.fields.length > 0, "mediated-sign-in lists fields");
-			t.ok(ext.scopes.includes(scope), `extension scopes include ${scope}`);
+			t.ok(ext.scopes.some((s) => s === scope), `extension scopes include ${scope}`);
 
 			const { httpStatus, body } = await agent.mediatedSignIn(session, { scope, credentials });
 			t.equal(httpStatus, 200, "mediated grant status code");

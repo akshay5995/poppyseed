@@ -458,10 +458,10 @@ export class TestAgent {
 		const issuer = new URL(poppy.auth.issuer);
 		// RFC 8414: the well-known part goes between the issuer's host and its path.
 		const metadataUrl = `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname === "/" ? "" : issuer.pathname}`;
-		const metadata = await this.getJson<AuthorizationServerMetadata>(metadataUrl);
+		const metadata = parseAuthorizationServerMetadata(await this.getJson<Record<string, unknown>>(metadataUrl));
 		if (metadata.issuer !== poppy.auth.issuer) throw new Error("issuer metadata does not match auth.issuer");
 		const resource = `https://${poppy.organization.domain}`.toLowerCase();
-		const listed = (metadata.protected_resources ?? []).some((r) => /^https:\/\/[^/]+$/.test(r) && r.toLowerCase() === resource);
+		const listed = metadata.protected_resources.some((r) => /^https:\/\/[^/]+$/.test(r) && r.toLowerCase() === resource);
 		if (!listed) throw new Error("protected_resources does not list this domain");
 
 		const api = (type: string) => poppy.apis?.find((entry) => entry.type === type)?.url;
@@ -1065,6 +1065,33 @@ export class TestAgent {
 		if (!response.ok) throw new PapError(response.status, body, response.headers.get("www-authenticate"));
 		return body;
 	}
+}
+
+/** JSON → string[]. Rejects a bare string so `.includes` cannot become a substring check. */
+function stringList(value: unknown, field: string): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+		throw new Error(`${field} must be a list of strings`);
+	}
+	return value as string[];
+}
+
+/** Authorization server metadata at the wire boundary: grant and resource lists are string[]. */
+function parseAuthorizationServerMetadata(raw: Record<string, unknown>): AuthorizationServerMetadata {
+	if (typeof raw.issuer !== "string") throw new Error("issuer metadata has no issuer");
+	if (typeof raw.token_endpoint !== "string") throw new Error("issuer metadata has no token_endpoint");
+	if (typeof raw.revocation_endpoint !== "string") throw new Error("issuer metadata has no revocation_endpoint");
+	return {
+		...raw,
+		issuer: raw.issuer,
+		token_endpoint: raw.token_endpoint,
+		revocation_endpoint: raw.revocation_endpoint,
+		grant_types_supported: stringList(raw.grant_types_supported, "grant_types_supported"),
+		protected_resources: stringList(raw.protected_resources, "protected_resources"),
+		scopes_supported: raw.scopes_supported === undefined ? undefined : stringList(raw.scopes_supported, "scopes_supported"),
+		authorization_endpoint: typeof raw.authorization_endpoint === "string" ? raw.authorization_endpoint : undefined,
+		device_authorization_endpoint: typeof raw.device_authorization_endpoint === "string" ? raw.device_authorization_endpoint : undefined,
+	};
 }
 
 function pickExtension(list: ExtensionVersion[] | undefined, version?: string): ExtensionVersion | undefined {

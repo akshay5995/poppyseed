@@ -80,19 +80,26 @@ export const discoveryChecks = [
 			t.equal(meta.issuer, (poppy.auth as { issuer: string }).issuer, "metadata issuer vs auth.issuer, character for character");
 			t.ok(typeof meta.token_endpoint === "string", "token_endpoint is present");
 			t.ok(typeof meta.revocation_endpoint === "string", "revocation_endpoint is present");
-			const resources = meta.protected_resources;
-			t.ok(Array.isArray(resources) && resources.includes(`https://${domain}`), `protected_resources includes https://${domain}, with no path or trailing slash: ${JSON.stringify(resources)}`);
-			const grants = meta.grant_types_supported;
-			t.ok(Array.isArray(grants), "grant_types_supported is a list");
-			t.ok(grants.includes("refresh_token"), "grant_types_supported includes refresh_token");
-			t.ok(!grants.includes("urn:ietf:params:oauth:grant-type:jwt-bearer"), "grant_types_supported has no jwt-bearer session grant");
-			if (grants.includes("authorization_code")) t.ok(typeof meta.authorization_endpoint === "string", "authorization_endpoint is present because authorization_code is a grant type");
-			if (grants.includes("urn:ietf:params:oauth:grant-type:device_code")) t.ok(typeof meta.device_authorization_endpoint === "string", "device_authorization_endpoint is present because the device code grant is");
+			const resources = Array.isArray(meta.protected_resources) ? (meta.protected_resources.filter((r): r is string => typeof r === "string") as string[]) : null;
+			const expectedResource = `https://${domain}`;
+			t.ok(resources !== null && resources.some((r) => r === expectedResource), `protected_resources includes https://${domain}, with no path or trailing slash: ${JSON.stringify(resources)}`);
+			const grants = Array.isArray(meta.grant_types_supported) ? (meta.grant_types_supported.filter((g): g is string => typeof g === "string") as string[]) : null;
+			t.ok(grants !== null, "grant_types_supported is a list");
+			const grantList = grants ?? [];
+			t.ok(grantList.some((g) => g === "refresh_token"), "grant_types_supported includes refresh_token");
+			const jwtBearerGrant = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+			const deviceCodeGrant = "urn:ietf:params:oauth:grant-type:device_code";
+			t.ok(!grantList.some((g) => g === jwtBearerGrant), "grant_types_supported has no jwt-bearer session grant");
+			if (grantList.some((g) => g === "authorization_code")) t.ok(typeof meta.authorization_endpoint === "string", "authorization_endpoint is present because authorization_code is a grant type");
+			if (grantList.some((g) => g === deviceCodeGrant)) t.ok(typeof meta.device_authorization_endpoint === "string", "device_authorization_endpoint is present because the device code grant is");
 			const mediated = (poppy.extensions as Record<string, unknown> | undefined)?.["mediated-sign-in"];
-			const signIn = grants.includes("authorization_code") || grants.includes("urn:ietf:params:oauth:grant-type:device_code") || mediated !== undefined;
+			const signIn = grantList.some((g) => g === "authorization_code") || grantList.some((g) => g === deviceCodeGrant) || mediated !== undefined;
 			if (signIn) t.ok(Array.isArray(meta.scopes_supported) && meta.scopes_supported.length > 0, "scopes_supported lists the scopes, because the company offers sign-in");
 			const algs = meta.dpop_signing_alg_values_supported;
-			if (algs !== undefined) t.ok(Array.isArray(algs) && algs.includes("ES256"), `dpop_signing_alg_values_supported includes ES256: ${JSON.stringify(algs)}`);
+			if (algs !== undefined) {
+				const algList = Array.isArray(algs) ? algs.filter((a): a is string => typeof a === "string") : [];
+				t.ok(algList.some((a) => a === "ES256"), `dpop_signing_alg_values_supported includes ES256: ${JSON.stringify(algs)}`);
+			}
 		},
 	}),
 
