@@ -1,6 +1,9 @@
+import type { ClientRegistry } from "./clients.ts";
 import { invalidRequest } from "./errors.ts";
 import type { Guarded } from "./guard.ts";
+import { guard } from "./guard.ts";
 import { strictJson } from "./json.ts";
+import type { Sealer } from "./tokens.ts";
 import type { Alternative, ExcludedTask, ResolvedConfig } from "./types.ts";
 import { json } from "./util.ts";
 
@@ -43,10 +46,23 @@ export function alternativeJson(alternative: Alternative, config: ResolvedConfig
 	return { ...(alternative.instructions ? { instructions: alternative.instructions } : {}), ...(references.length > 0 ? { references } : {}) };
 }
 
-/** GET {excluded_tasks.url}: the same public document for every User, fetched with no token (spec 8.1). */
-export function excludedTasksDocument(config: ResolvedConfig): Response {
+/** GET {tasks.endpoint}: Session-scoped task coverage with no access token (spec 9). */
+export async function tasksEndpoint(
+	request: Request,
+	publicUrl: string,
+	config: ResolvedConfig,
+	clients: ClientRegistry,
+	sealer: Sealer,
+): Promise<Response> {
+	if (request.headers.has("authorization")) throw invalidRequest("tasks.endpoint is fetched with the Session header and no access token");
+	await guard(request, publicUrl, config, clients, sealer, "dpop");
 	const tasks = (config.excludedTasks ?? []).map(({ task, alternative }) => ({ task, ...(alternative ? { alternative: alternativeJson(alternative, config) } : {}) }));
-	return json({ tasks }, 200, { "cache-control": "public, max-age=3600" });
+	const body: Record<string, unknown> = {
+		excluded_tasks: tasks,
+		...(config.feedback ? { feedback: { endpoint: config.urls.feedback } } : {}),
+	};
+	// Mark private when the response can differ by Session (spec 9).
+	return json(body, 200, { "cache-control": "private, max-age=60" });
 }
 
 /**
