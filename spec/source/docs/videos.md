@@ -1,12 +1,18 @@
 # Video tutorials
 
-Short videos on how Personal Agent Protocol works, each a few minutes long. Start with the first, then watch the others in any order. The videos can lag behind the latest version, so the [specification](/docs/0.3/spec) should always be considered the source of truth.
+Short videos on how Personal Agent Protocol works, each a few minutes long. Start with the first, then watch the others in any order. The videos can lag behind the latest version, so the [specification](/docs/1.0/spec) should always be considered the source of truth.
 
 ## What is the Personal Agent Protocol?
 
 What is the Personal Agent Protocol (also known as "Poppy"), and why do we need one? This video introduces Poppy and gives a high-level overview of how it works.
 
 [Watch the video](https://personalagentprotocol.org/docs/videos#overview)
+
+## Just the basics
+
+There are many features that the Personal Agent Protocol supports, but what should you do if you just want to provide a basic level of support? Let's find out.
+
+[Watch the video](https://personalagentprotocol.org/docs/videos#basics)
 
 ## Connecting your agent
 
@@ -20,11 +26,11 @@ You sign in on the company's own site, and your agent never sees your password. 
 
 [Watch the video](https://personalagentprotocol.org/docs/videos#direct-sign-in)
 
-## Mediated sign-in
+## Device sign-in
 
-Some companies would rather let the agent handle sign-in. This video explains Mediated Sign-In, where a personal agent passes along sign-in details (like a phone number and a one-time code) and keeps them safe.
+How can your users sign in if your agent doesn't have a browser available? This video explains Device Sign-In, where a personal agent passes along a QR code to the user, who can then sign in and authorize an agent from their phone.
 
-[Watch the video](https://personalagentprotocol.org/docs/videos#mediated-sign-in)
+[Watch the video](https://personalagentprotocol.org/docs/videos#device-sign-in)
 
 ## Agent-to-agent conversations
 
