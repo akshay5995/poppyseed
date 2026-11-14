@@ -1,0 +1,41 @@
+---
+title: "A conversation"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Open
+    lg1: Handoff
+    lg2: Conflict
+    lg3: Closed
+  }
+  class lg0 teal
+  class lg1 orange
+  class lg2 yellow
+  class lg3 purple
+  s0: Not started
+  s1: Handoff waiting
+  s2: Accepted
+  s3: Closed
+  s4: Request id conflict
+  s5: Closed, cancel refused
+  [*] --> s0
+  s0 --> s1: ask for a person
+  s0 --> s2: post a message
+  s0 --> s3: close (answered immediately)
+  s1 --> s0: cancel the handoff
+  s1 --> s3: close (answered immediately)
+  s2 --> s1: ask for a person
+  s2 --> s3: close (answered immediately)
+  s2 --> s4: post a message
+  s3 --> s5: cancel after close
+  s1 --> s2: cancel the handoff
+  s1 --> s4: post a message
+  s4 --> s2: post a message
+  s4 --> s5: close (answered immediately)
+  s4 --> s1: post a message
+  class s0 teal
+  class s1 orange
+  class s2 teal
+  class s3 purple
+  class s4 yellow
+  class s5 purple
