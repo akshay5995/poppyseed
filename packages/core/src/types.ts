@@ -5,8 +5,10 @@ import type { PATHS } from "./paths.js";
 import type { RateLimits } from "./ratelimit.ts";
 import type { Store } from "./store.ts";
 
-export const PROTOCOL_VERSION = "0.3";
+export const PROTOCOL_VERSION = "0.4";
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
+/** The only scope the protocol defines: signed-in browser join (spec 6). */
+export const BROWSER_SIGN_IN_SCOPE = "poppy:browser-sign-in";
 
 /** Who is calling a tool or protected route. Never contains tokens. */
 /** A scope's hints in `auth.scope_hints` (spec 4.4). */
@@ -53,23 +55,21 @@ export interface RunTool<Input extends z.ZodType = z.ZodType, Scope extends stri
 	operation?: never;
 }
 
-/** What an action would do, for the User to approve (operations extension 3). */
+/** What an action would do, for the User to approve (operations extension v3). */
 export interface Proposal<T extends Terms = Terms> {
-	/** The terms in plain language: what will happen, to what, and any cost, date or condition. The User decides from this alone. */
-	summary: string;
-	/** The same terms as JSON. `perform` receives exactly these once confirmed. */
+	/** The terms in plain language. Optional; everything that affects the action must be in `terms`. */
+	summary?: string;
+	/** The terms as JSON. Required. An approval covers exactly these. */
 	terms: T;
 	/** Identifies the action, such as an order id, so proposing it again returns the same operation, as a new revision if the terms changed. */
 	key?: string;
-	/** Seconds this revision can be confirmed for. Default 900. */
+	/** Seconds this revision can be approved for. Default 900. */
 	expiresIn?: number;
-	/** Accept only the User's own approval of this revision, not a standing permission. */
+	/** Decline agent approvals; only `approver: "user"` is accepted. */
 	userApprovalRequired?: boolean;
-	/** A page on your site that shows this operation. */
-	url?: string;
 }
 
-/** The confirmed revision, as `perform` and `cancel` see it. */
+/** The approved revision, as `perform` sees it. */
 export interface ConfirmedOperation<T extends Terms = Terms> {
 	/** The operation ID. Derive downstream idempotency keys from it. */
 	id: string;
@@ -79,21 +79,20 @@ export interface ConfirmedOperation<T extends Terms = Terms> {
 
 /**
  * A tool with a business effect, such as a booking. It proposes an operation
- * and performs it only after the Personal Agent confirms it (operations extension).
+ * and performs it only after the Personal Agent sends Poppy-Approval
+ * (operations extension v3).
  */
 export interface OperationTool<Input extends z.ZodType = z.ZodType, Scope extends string | null = string | null, T extends Terms = Terms> extends ToolBase<Input, Scope> {
 	run?: never;
 	operation: {
-		/** Works out the terms. Must not change anything. */
+		/** Works out the terms. Must not change anything. Must return `terms`. */
 		propose(input: z.output<Input>, ctx: ContextFor<Scope>): Promise<Proposal<T>> | Proposal<T>;
 		/**
-		 * Performs the confirmed terms, at most once per operation. Return what
+		 * Performs the approved terms, at most once per operation. Return what
 		 * changed; throw OperationFailed if it didn't complete. Any other error
 		 * leaves the operation in_progress until you call operations.settle().
 		 */
 		perform(operation: ConfirmedOperation<T>, ctx: ContextFor<Scope>): OperationResult | Promise<OperationResult>;
-		/** Tries to stop an operation in progress. Return what changed if it stopped, or null if it couldn't. */
-		cancel?(operation: ConfirmedOperation<T>, ctx: ContextFor<Scope>): Promise<OperationResult | null>;
 		/** For agents without the operations extension: "refuse" answers extension_required (default); "perform" acts right away. */
 		withoutExtension?: "refuse" | "perform";
 	};
@@ -189,8 +188,9 @@ interface BaseConfig {
 	tools?: Record<string, ToolDefinition>;
 	/**
 	 * Your scopes, each with the description Personal Agents and Users read to
-	 * choose them (spec 4.4), such as `{ "orders:read": "See your orders and returns" }`.
-	 * Names must not start with `poppy:`.
+	 * choose them (spec 4.7), such as `{ "orders:read": "See your orders and returns" }`.
+	 * Names must not start with `poppy:` except `poppy:browser-sign-in`, which the
+	 * protocol defines for signed-in browser join (spec 6).
 	 */
 	scopes?: Record<string, string>;
 	/**
@@ -224,19 +224,23 @@ interface BaseConfig {
 		/** Accept http:// and loopback client_id URLs. Local development only. */
 		allowInsecureClients?: boolean;
 	};
-	/** Lets Personal Agents' browsers join their Session on your website (spec 5). */
+	/** Lets Personal Agents' browsers join their Session on your website (spec 6). */
 	web?: {
 		/** Name of the Session cookie. Default __Host-poppyseed_session, or poppyseed_session with cookieDomain. */
 		cookieName?: string;
 		/** Domain attribute for the cookie, to cover subdomains. Default: this host only. */
 		cookieDomain?: string;
+		/** Website treats poppy:browser-sign-in as the account's full access (spec 6). */
+		unscoped?: boolean;
+		/** Ask Personal Agents not to browse in a browser (spec 6). */
+		disabled?: boolean;
 	};
 	/** Request limits by Session, User and Personal Agent. Pass false to turn them off. */
 	rateLimits?: RateLimits | false;
 	/** Conversations with Personal Agents: your Company Agent and handoff to your staff (spec 7). */
 	conversations?: ConversationsConfig;
 	operations?: {
-		/** Milliseconds a confirm waits for `perform` before answering in_progress. Default 3000. */
+		/** Kept for config compatibility; approvals run to completion or answer 503. */
 		confirmWait?: number;
 	};
 	/**
@@ -261,6 +265,7 @@ export type ResolvedConfig = Omit<BaseConfig, "baseUrl" | "store" | "tools" | "f
 		fetch: typeof fetch;
 		scopes: Record<string, string>;
 		apiDescription: string;
+		protocolVersion: string;
 		ttl: { token: number; session: number; accountToken: number };
 		urls: Record<keyof typeof PATHS, string> & { issuer: string };
 	};
