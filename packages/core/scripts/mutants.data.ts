@@ -199,6 +199,9 @@ export const UNIT_MUTANTS: UnitMutant[] = [
 	{ name: "max-age ignored", file: "packages/core/src/clients.ts", find: "Math.min(MAX_CACHE_MS, Math.max(MIN_CACHE_MS, Math.min(metadata.maxAgeMs, keySet.maxAgeMs)))", replace: "MIN_CACHE_MS", test: "packages/core/test/client-cache.test.ts", caughtBy: "metadata caching > keeps metadata for its max-age" },
 	{ name: "cache unbounded", file: "packages/core/src/clients.ts", find: "Math.min(MAX_CACHE_MS, Math.max(MIN_CACHE_MS, Math.min(metadata.maxAgeMs, keySet.maxAgeMs)))", replace: "Math.min(metadata.maxAgeMs, keySet.maxAgeMs)", test: "packages/core/test/client-cache.test.ts", caughtBy: "metadata caching > keeps it at least a minute and at most a day" },
 
+	{ name: "disabled web still lists a browser session", file: "packages/core/src/discovery.ts", find: "...(config.web.disabled ? { disabled: true } : { browser_session_endpoint: urls.browserSession, ...(config.web.unscoped ? { unscoped: true } : {}) }),", replace: "browser_session_endpoint: urls.browserSession, ...(config.web.unscoped ? { unscoped: true } : {}), ...(config.web.disabled ? { disabled: true } : {}),", test: "packages/core/test/discovery-web.test.ts", caughtBy: "web.disabled lists no browser_session_endpoint" },
+	{ name: "unscoped web omits the browser endpoint", file: "packages/core/src/discovery.ts", find: "browser_session_endpoint: urls.browserSession", replace: "browser_session_endpoint: config.web.unscoped ? undefined : urls.browserSession", test: "packages/core/test/discovery-web.test.ts", caughtBy: "web.unscoped lists browser_session_endpoint" },
+
 	// The Claude adapter's tool loop.
 	{ name: "tool results not sent back", file: "packages/core/src/claude.ts", find: 'messages.push({ role: "user", content: results });', replace: "", test: "packages/core/test/claude.test.ts", caughtBy: "calls tools through the turn and replies in plain text" },
 

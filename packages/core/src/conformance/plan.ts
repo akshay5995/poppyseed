@@ -174,7 +174,7 @@ export const PLAN: Record<string, PlanEntry> = {
 
 	// web
 	"web.join-session-sends": { manual: "no black-box check yet (06-web.md); Company/implementation policy — It doesn't join a Session for that, and sends the Session header instead, always…" },
-	"web.company-sets-disabled": { manual: "no black-box check yet (06-web.md); Company/implementation policy — A Company that sets `web.disabled` MUST NOT list `browser_session_endpoint`" },
+	"web.company-sets-disabled": { manual: "reference company leaves web.disabled false; unit test packages/core/test/discovery-web.test.ts › web.disabled lists no browser_session_endpoint" },
 	"web.list-agent-apis": { manual: "no black-box check yet (06-web.md); Company/implementation policy — MUST list `agent` or `apis`" },
 	"web.says-what-company": { manual: "no black-box check yet (06-web.md); Company/implementation policy — It says what the Company prefers, and isn't a promise that Personal Agents won't…" },
 	"web.cookie-sent-form": { manual: "no black-box check yet (06-web.md); Company/implementation policy — The cookie MUST NOT be sent with a form submitted from another site" },
@@ -191,7 +191,7 @@ export const PLAN: Record<string, PlanEntry> = {
 	"web.poppy-browser-sign": { manual: "no black-box check yet (06-web.md); Company/implementation policy — When `poppy:browser-sign-in` gives the account's full access on the website, the…" },
 	"web.anything-account-direct": { manual: "no black-box check yet (06-web.md); Company/implementation policy — see and do anything your account can do there,\" and in Direct and Device Sign-In…" },
 	"web.company-whose-website": { manual: "no black-box check yet (06-web.md); Company/implementation policy — A Company whose website treats `poppy:browser-sign-in` as the account's full acc…" },
-	"web.company-sets-unscoped": { manual: "no black-box check yet (06-web.md); Company/implementation policy — A Company that sets `web.unscoped` MUST list `browser_session_endpoint`" },
+	"web.company-sets-unscoped": { manual: "reference company leaves web.unscoped false; unit test packages/core/test/discovery-web.test.ts › web.unscoped lists browser_session_endpoint" },
 	"web.website-refuses-action": { manual: "no black-box check yet (06-web.md); Company/implementation policy — When the website refuses an action because the Session lacks a scope, it SHOULD …" },
 
 	// apis

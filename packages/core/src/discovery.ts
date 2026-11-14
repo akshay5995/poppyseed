@@ -31,7 +31,12 @@ export function poppyDocument(config: ResolvedConfig, tools: Tools): Record<stri
 		...(apis ? { apis } : {}),
 		// One of agent, apis or web is required; a site with neither is at least browsable.
 		...(config.web
-			? { web: { browser_session_endpoint: urls.browserSession, ...(config.web.unscoped ? { unscoped: true } : {}), ...(config.web.disabled ? { disabled: true } : {}) } }
+			? {
+					web: {
+						// web.disabled MUST NOT list browser_session_endpoint (spec 6).
+						...(config.web.disabled ? { disabled: true } : { browser_session_endpoint: urls.browserSession, ...(config.web.unscoped ? { unscoped: true } : {}) }),
+					},
+				}
 			: apis || config.conversations
 				? {}
 				: { web: {} }),
