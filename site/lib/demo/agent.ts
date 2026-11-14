@@ -22,7 +22,7 @@ export function demoAgent(): Promise<TestAgent> {
 		clientName: "Poppyseed demo agent",
 		fetch: (url, init) => (shared.poppyDemoCompany ?? inProcess)(url, init),
 		allowInsecure: origin.startsWith("http://"),
-		extensions: { operations: { version: "1" } },
+		extensions: { operations: "3" },
 	});
 	return shared.poppyDemoAgent;
 }

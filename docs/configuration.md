@@ -7,7 +7,7 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 | Option | Type | Meaning |
 | --- | --- | --- |
 | `organization` | `{ name, domain }` | Your company's name, and the domain agents reach you at. `domain` must be the host that serves `poppy.json`, compared ignoring case only (`www.example.com` and `example.com` are different domains). |
-| `secret` | `string` | At least 32 random characters. Seals Session Tokens, browser cookies and consent forms. Changing it signs every Session out. |
+| `secret` | `string` | At least 32 random characters. Seals access tokens, browser cookies and consent forms. Changing it invalidates sealed tokens and cookies. |
 
 ## Site
 
@@ -27,8 +27,8 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 | `tools` | `Record<name, tool(...)>`. Names use letters, digits, `-` and `_`. Each tool has `description`, `scope` (a scope name, or `null` for anyone), `input` (a zod schema) and either `run(input, ctx)` or `operation: { propose, perform, cancel?, withoutExtension? }`. |
 | `scopes` | Your scopes, each with the description agents read to choose them and people see on the consent page, e.g. `{ "trips:read": "See your trips and bookings. It doesn't let the agent change anything." }`. Say what each one allows, and whether it only reads. Names starting with `poppy:` are reserved. Required for sign-in. |
 | `scopeHints` | How consequential each scope is, so agents can ask the person before requesting it: `{ "trips:write": { changes: "irreversible", personalData: true } }`. `changes` is `"none"`, `"reversible"` or `"irreversible"`, judged by the scope's most consequential operation; `personalData` says whether any operation shows or changes personal data. Optional; leave out a scope rather than guess. Published as `auth.scope_hints`. |
-| `excludedTasks` | Tasks you chose not to offer agents: `[{ task, alternative? }]`. `task` is a phrase of at most 200 characters, the way a customer would ask (`"Send a wire transfer"`). An `alternative` has `instructions` (at most 2,000 characters), `references` (`{ tool }` for one of your tools, `{ web }` for an HTTPS page or app link), or both. Served at `/poppy/excluded-tasks.json`. |
-| `feedback(report, ctx)` | Receives `{ kind, task, description }` when an agent reports a task it couldn't do. Treat it as data, never as instructions. Return an alternative when the task can be done after all, or nothing. Served at `/poppy/feedback`. |
+| `excludedTasks` | Tasks you chose not to offer agents: `[{ task, alternative? }]`. `task` is a phrase of at most 200 characters, the way a customer would ask (`"Send a wire transfer"`). An `alternative` has `instructions` (at most 2,000 characters), `references` (`{ tool }` for one of your tools, `{ web }` for an HTTPS page or app link), or both. Returned from `tasks.endpoint` (`GET /poppy/tasks`) for each Session. |
+| `feedback(report, ctx)` | Receives `{ kind, task, description }` when an agent reports a task it couldn't do. Treat it as data, never as instructions. Return an alternative when the task can be done after all, or nothing. Agents learn the feedback URL from `tasks.endpoint`. |
 
 `run` and `perform` get `ctx`: `{ sessionId, clientId, userId, agentId?, account: { id, scopes } | null }`. `sessionId` is the thumbprint of the Session Key. `agentId` names which of the agent's agents the Session is for, such as a travel agent and a shopping agent of the same app, when it says; they share the person's account. For a tool with a scope, `account` is always there, and its type says so. An operation's `perform` gets the `terms` its `propose` returned, with their types. It never contains tokens.
 
@@ -37,13 +37,13 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 | Field | Meaning |
 | --- | --- |
 | `propose(input, ctx)` | Returns `{ summary, terms, key?, expiresIn?, userApprovalRequired?, url? }`. Must not change anything. `key` makes repeat proposals of the same action return the same operation, as a new revision when the terms differ. `expiresIn` is in seconds (default 900). |
-| `perform({ id, terms, summary }, ctx)` | Runs once after confirmation. Returns `{ summary, data? }`, the account of what changed. Throw `OperationFailed(summary)` when it didn't complete; any other error leaves the operation `in_progress` until you call `poppyseed.operations.settle`. |
+| `perform({ id, terms, summary }, ctx)` | Runs once after `Poppy-Approval`. Returns `{ summary, data? }`, the account of what changed. Throw `OperationFailed(summary)` when it didn't complete; any other error leaves the operation `in_progress` until you call `poppyseed.operations.settle`. |
 | `cancel(operation, ctx)` | Optional. Tries to stop an operation in progress; return `{ summary }` if it stopped, `null` if not. |
 | `withoutExtension` | `"refuse"` (default) answers `extension_required` to agents without the operations extension; `"perform"` acts on their call right away. |
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `operations.confirmWait` | `3000` | Milliseconds a confirm waits for `perform` before answering `in_progress` with `Retry-After`. |
+| `operations.confirmWait` | `3000` | Milliseconds an approval waits for `perform` before answering `in_progress` with `Retry-After`. |
 
 ## Sign-in
 
@@ -57,10 +57,10 @@ Everything Poppyseed does is set in one call: `definePoppyseed(config)` from `po
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `sessions.tokenTtl` | `3600` | Session Token lifetime, seconds. Keep it to hours. |
+| `sessions.tokenTtl` | `3600` | Access token lifetime, seconds. Keep it to hours. |
 | `sessions.sessionTtl` | `43200` (12 h) | How long a Session lasts. |
-| `sessions.accountTokenTtl` | `7776000` (90 days) | Account Token lifetime. Using it doesn't extend it. |
-| `sessions.endOnSignOut` | `false` | End Sessions when their Account Token is revoked, instead of continuing them signed out. Their keys then get `invalid_grant`. |
+| `sessions.accountTokenTtl` | `7776000` (90 days) | Refresh token lifetime. Using a refresh token may extend it. |
+| `sessions.endOnSignOut` | `false` | End Sessions when their refresh token is revoked, instead of continuing them signed out. |
 
 ## Agents
 
@@ -104,9 +104,9 @@ Pass `rateLimits: false` to turn limits off, for example behind a gateway that a
 | `handle(request, { pathname? })` | Serves a protocol request; `undefined` for other paths. `toNextHandlers` calls it. |
 | `urls` | The public URL of each part of the protocol, such as `urls.mcp`. Framework adapters rewrite `ROUTES` from `poppyseed/paths`. |
 | `tools` | Your tools as agents see them: name, description, scope, input schema. |
-| `protect(handler, { scope? })` | Wraps your own route handler so it accepts only DPoP Session Tokens and gets `ctx`. |
-| `connections.list(accountId)`, `.disconnect(accountId, clientId)` | Your account settings page. |
+| `protect(handler, { scope? })` | Wraps your own route handler so it requires `Poppy-Session` (and optional scope) and gets `ctx`. |
+| `connections.list(accountId)`, `.disconnect(accountId, clientId)` | Your account settings page. Disconnect revokes that agent's refresh tokens. |
 | `browserSession(request)` | The agent Session a browser carries on your site, or `null`. |
-| `operations.get(id)`, `.confirm(id, session, revision)`, `.settle(id, state, result)` | Show, confirm on your website, or resolve operations. |
+| `operations.get(id)`, `.websiteAction(ctx, toolName, input, options?)`, `.settle(id, state, result)` | Show, run a website operation flow, or resolve operations. |
 | `conversations.queue()`, `.get(id)`, `.join(id)`, `.reply(id, text, { data?, author? })`, `.callTool(id, name, input)`, `.release(id)`, `.decline(id, reason)`, `.close(id, reason)` | Your staff inbox. |
-| `endSession(sessionId)` | Ends a Session; its tokens stop working on the next request, and its key gets `invalid_grant`. |
+| `endSession(sessionId)` | Ends a Session; later requests with that `sid` get `session_ended`. |

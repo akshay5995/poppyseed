@@ -77,11 +77,11 @@ export const poppyseed = definePoppyseed({
 
 Direct and Device Sign-In can grant any of your scopes; the person approves some or all of them. Each scope is enforced on its own, so a write scope doesn't allow reading unless your tools say so, and its description should say which. Agents ask for the fewest scopes a task needs.
 
-Agents get an Account Token and can sign in again later without asking. Give people a page that lists connected agents and disconnects them:
+Agents get a refresh token and can get access again later without asking. Give people a page that lists connected agents and disconnects them:
 
 ```ts
 const connections = await poppyseed.connections.list(user.id); // name, scopes, last use
-await poppyseed.connections.disconnect(user.id, clientId); // revokes and signs its Sessions out
+await poppyseed.connections.disconnect(user.id, clientId); // revokes its refresh tokens
 ```
 
 ### Mediated Sign-In
@@ -108,7 +108,7 @@ Poppyseed never stores or returns the credentials, answers an unknown account an
 
 ## Ask before acting: operations
 
-For anything with consequences, a booking, a charge, a cancellation, make the tool an operation ([operations extension](https://personalagentprotocol.org/docs/extensions/operations)). The agent gets the exact terms, shows them to the person, and confirms only that version; you perform it once.
+For anything with consequences, a booking, a charge, a cancellation, make the tool an operation ([operations extension](https://personalagentprotocol.org/docs/0.4/extensions/operations)). The agent gets the exact terms, shows them to the person, and retries the same request with `Poppy-Approval` for only that version; you perform it once.
 
 ```ts
 import { OperationFailed, tool } from "poppyseed";
@@ -128,7 +128,7 @@ book_flight: tool({
         userApprovalRequired: offer.price > 1000, // not a standing permission: the person must approve
       };
     },
-    // Runs once, after the agent confirms. Use the operation id as your payment idempotency key.
+    // Runs once, after the agent sends Poppy-Approval. Use the operation id as your payment idempotency key.
     perform: async ({ id, terms }, ctx) => {
       const booking = await bookings.create(ctx.account.id, terms, { idempotencyKey: id });
       return { summary: `Booked ${booking.reference}. $${terms.price} charged.` };
@@ -172,7 +172,7 @@ await inbox.release(id); // back to the Company Agent
 
 ## Let agents browse your site
 
-An agent's browser can join its Session on your website, so your pages show what that Session may see. Turn it on with `web: {}`. The agent's browser loads `/poppy/browser-session`, which gives it a one-time code tied to that browser; the agent signs a proof over the code with its Session Key, and the browser submits it. Poppyseed then sets the Session's cookie. No other browser can join, so nobody can push someone else's browser into their Session.
+An agent's browser can join its Session on your website, so your pages show what that Session may see. Turn it on with `web: {}`. The agent's browser loads `/poppy/browser-session`, which gives it a one-time code tied to that browser; the agent authorizes that code with `Poppy-Session` at `/authorize`, and the browser submits the form. Poppyseed then sets the Session's cookie. No other browser can join, so nobody can push someone else's browser into their Session.
 
 Then check the Session before your own login on pages agents use:
 
@@ -207,7 +207,7 @@ feedback: async (report, ctx) => {
 },
 ```
 
-`{ tool }` points to one of your tools, on both your MCP and OpenAPI APIs. The list is served, the same for everyone, at `/poppy/excluded-tasks.json`.
+`{ tool }` points to one of your tools, on both your MCP and OpenAPI APIs. Agents fetch the list from `tasks.endpoint` (`GET /poppy/tasks`) with the Session header and no access token.
 
 ## Keep work alive after the response
 

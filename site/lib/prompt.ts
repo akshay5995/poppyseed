@@ -1,5 +1,5 @@
 /** What a developer pastes into their coding agent (Claude Code, Cursor, Codex…) to add Poppyseed to their app. */
-export const AGENT_PROMPT = `Add the Personal Agent Protocol (Poppy for short; spec: https://personalagentprotocol.org/docs/spec) to this Next.js App Router app with the poppyseed package, so people's personal AI agents can use it.
+export const AGENT_PROMPT = `Add the Personal Agent Protocol (Poppy for short; spec: https://personalagentprotocol.org/docs/0.4/spec) to this Next.js App Router app with the poppyseed package, so people's personal AI agents can use it.
 
 1. Run: npm install poppyseed zod
    Then: echo "POPPYSEED_SECRET=$(openssl rand -base64 48)" >> .env.local

@@ -96,7 +96,7 @@ export default function Home() {
 			</section>
 
 			<footer className="muted">
-				Built with <a href="https://withpoppyseed.dev">Poppyseed</a> · Personal Agent Protocol draft 0.3 · Demo
+				Built with <a href="https://withpoppyseed.dev">Poppyseed</a> · Personal Agent Protocol Poppy 0.4 · Demo
 				data, no real bookings.
 			</footer>
 		</main>

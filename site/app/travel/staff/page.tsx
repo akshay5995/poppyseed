@@ -55,7 +55,7 @@ export default async function Staff({ searchParams }: { searchParams: Promise<{ 
 			{open && (
 				<section>
 					<h2>
-						{open.id} <span className="chip">{open.responder}</span> <span className="chip">{open.status}</span>
+						{open.id} <span className="chip">{open.responder}</span> <span className="chip">{open.closed ? "closed" : open.working ? "working" : open.handoff}</span>
 					</h2>
 					<ul className="offers">
 						{open.messages.map((m) => (

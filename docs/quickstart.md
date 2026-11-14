@@ -87,12 +87,11 @@ Your site now describes itself at http://localhost:3000/.well-known/poppy.json. 
 npx poppyseed agent http://localhost:3000 menu '{"size":"small"}'
 ```
 
-The agent discovers Seed Café, starts a Session with a new Session Key, lists your tools and calls `menu` (output abridged):
+The agent discovers Seed Café, starts a signed-out Session, lists your tools and calls `menu` (output abridged):
 
 ```
 ▸ discovered Seed Café
-▸ signed-out DPoP session
-▸ MCP token for the same session
+▸ signed-out session
 ▸ tools
 menu: Drinks on the menu today, with prices in USD.
 

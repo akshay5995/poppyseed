@@ -7,7 +7,7 @@ export default function DocsIndex() {
 		<article className="prose">
 			<h1>Poppyseed docs</h1>
 			<p className="lede-doc">
-				Poppyseed implements the <a href="https://personalagentprotocol.org/docs/spec">Personal Agent Protocol</a> (Poppy for short) in your Next.js app. Start with the quickstart, then add what your site needs.
+				Poppyseed implements the <a href="https://personalagentprotocol.org/docs/0.4/spec">Personal Agent Protocol</a> (Poppy 0.4) in your Next.js app. Start with the quickstart, then add what your site needs.
 			</p>
 			<a className="start-card" href="/docs/quickstart">
 				<strong>Quickstart</strong>

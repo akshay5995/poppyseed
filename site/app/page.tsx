@@ -208,7 +208,7 @@ export default async function Home() {
 					<h2>Checked against the spec</h2>
 					<p className="section-lede">
 						<strong>{PROOF.checks}</strong> conformance checks pass and none fail over HTTP through a real Next.js server, covering <strong>{PROOF.rules}</strong>{" "}
-						rules of the <a href="https://personalagentprotocol.org/docs/spec">Personal Agent Protocol</a>. Each check is proven by breaking its rule on purpose and watching it fail.
+						rules of the <a href="https://personalagentprotocol.org/docs/0.4/spec">Personal Agent Protocol</a>. Each check is proven by breaking its rule on purpose and watching it fail.
 					</p>
 					<p>Run the same checks against your own site:</p>
 					<div className="install">
@@ -219,7 +219,7 @@ export default async function Home() {
 			</main>
 			<footer className="site-footer">
 				<p>
-					<strong>Poppyseed</strong> is MIT licensed and independent: the <a href="https://personalagentprotocol.org">Personal Agent Protocol</a> and the name Poppy belong to its authors. The protocol is a draft, so expect changes.
+					<strong>Poppyseed</strong> is MIT licensed and independent: the <a href="https://personalagentprotocol.org">Personal Agent Protocol</a> and the name Poppy belong to its authors. Poppy 0.4 is the 1.0 release candidate; expect changes before 1.0.
 				</p>
 				<nav aria-label="Footer">
 					<a href="/docs/quickstart">Quickstart</a>
