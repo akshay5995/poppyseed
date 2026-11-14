@@ -4,7 +4,7 @@ This folder holds the **Personal Agent Protocol** as Poppyseed implements it: th
 
 | Version | Status | Files |
 | --- | --- | --- |
-| [0.3](pap-0.3/README.md) | Draft, in progress at personalagentprotocol.org | `pap-0.3/*.md` |
+| [1.0](pap-1.0/README.md) | Draft, in progress at personalagentprotocol.org. Not published: the changelog says the list grows until 1.0 is published. | `pap-1.0/*.md` |
 
 [STATUS.md](STATUS.md) is generated. It shows every requirement, who must meet it, and how we verify it.
 
@@ -13,7 +13,7 @@ This folder holds the **Personal Agent Protocol** as Poppyseed implements it: th
 Each normative rule is one list item in this exact shape:
 
 ```md
-- **MUST** · company · `dpop.verify` — The company checks the DPoP signature, key binding, …
+- **MUST** · company · `session.verify-before-use` — The Company completes the Session checks before relying on Session claims…
 ```
 
 | Part | Values |
@@ -23,7 +23,7 @@ Each normative rule is one list item in this exact shape:
 | ID | `area.slug`. Stable forever: never renumber, never reuse. Removed rules are deleted, not recycled. |
 | Text | One sentence. Plain language. |
 
-The nearest heading above a requirement gives its official section, for example `## 4.3 Using Session Tokens`. Prose, tables and examples around the rules are free-form.
+The nearest heading above a requirement gives its official section, for example `## 5.3 Session verification`. Prose, tables and examples around the rules are free-form.
 
 `pnpm spec:check` rejects a bullet that starts with a level but doesn't match the shape, so a typo can't silently drop a rule.
 

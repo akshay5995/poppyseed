@@ -15,7 +15,7 @@ import { parseSpec } from "../src/conformance/spec/parse.ts";
 import { MUTANTS, NOT_MUTATED } from "./mutants.data.ts";
 import type { Requirement } from "../src/conformance/types.ts";
 
-const SPEC_VERSION = "0.3";
+const SPEC_VERSION = "1.0";
 const root = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 const specDir = join(root, `spec/pap-${SPEC_VERSION}`);
 const generatedPath = join(root, "packages/core/src/conformance/requirements.generated.ts");
