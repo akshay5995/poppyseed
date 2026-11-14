@@ -1,4 +1,6 @@
 import { calculateJwkThumbprint, exportJWK, generateKeyPair, SignJWT, type JWK, type JWTHeaderParameters } from "jose";
+import { DELEGATION_TYP, SESSION_TYP } from "../session.ts";
+import { BROWSER_SIGN_IN_SCOPE, PROTOCOL_VERSION } from "../types.ts";
 import type { Fetch } from "./types.ts";
 
 import type { Browser } from "./browser.ts";
@@ -9,7 +11,7 @@ export type * from "./types.ts";
 
 /**
  * A scriptable personal agent for developing Personal Agent Protocol companies. It does what a
- * real agent does on the wire (discovery, private_key_jwt, DPoP, MCP), and
+ * real agent does on the wire (discovery, private_key_jwt, Poppy-Session, DPoP, MCP), and
  * every step can be bent out of shape so conformance checks can send the
  * malformed requests a company must refuse.
  */
@@ -21,8 +23,11 @@ export interface TestAgentOptions {
 	fetch?: Fetch;
 	/** Accept http:// companies (local dev). */
 	allowInsecure?: boolean;
-	/** Extensions to advertise in client metadata, e.g. { operations: { version: "1" } }. */
-	extensions?: Record<string, unknown>;
+	/**
+	 * Extensions to declare on Poppy-Extensions for resource requests, e.g.
+	 * `{ operations: "3" }`. Not put in client metadata (spec 4.1 / 3.3).
+	 */
+	extensions?: Record<string, string>;
 }
 
 /** The company an agent discovered, with the endpoints it offers. */
@@ -33,24 +38,26 @@ export interface Discovery {
 	endpoints: Endpoints;
 }
 
+/** One version entry under `extensions` in poppy.json (spec 3.3). */
+export type ExtensionVersion = { version: string; endpoint?: string } & Record<string, unknown>;
+
 /** The /.well-known/poppy.json document (spec 3). */
 export interface PoppyDocument {
 	protocol_version: string;
 	organization: { name: string; domain: string };
-	agent?: { protocols?: { type: string; endpoint: string }[] };
+	agent?: { protocols?: { type: string; endpoint: string; access?: string }[] };
 	apis?: { type: string; url: string; description: string; resource?: string }[];
-	web?: { browser_session_endpoint?: string };
+	web?: { browser_session_endpoint?: string; disabled?: boolean; unscoped?: boolean };
 	auth?: {
 		issuer: string;
-		/** Descriptions of scopes no OpenAPI description describes (spec 4.4). */
+		disabled?: boolean;
 		scopes?: Record<string, string>;
-		/** As served: a Personal Agent treats an unknown `changes` as `irreversible` (spec 4.4). */
 		scope_hints?: Record<string, { changes?: unknown; personal_data?: unknown }>;
-		mediated?: { endpoint: string; scopes: string[]; fields: { name: string; label: string; secret: boolean }[] };
 	};
-	feedback?: { endpoint: string };
-	excluded_tasks?: { url: string };
-	extensions?: { operations?: { version: string; endpoint: string } } & Record<string, { version: string } | undefined>;
+	tasks?: { endpoint: string };
+	/** Each extension name maps to the versions the company supports. */
+	extensions?: Record<string, ExtensionVersion[] | undefined>;
+	supported_versions?: Record<string, string>;
 }
 
 /** OAuth Authorization Server Metadata with protected_resources (spec 3.2). */
@@ -66,20 +73,44 @@ export interface AuthorizationServerMetadata {
 	[member: string]: unknown;
 }
 
-/** Where to reach what the company offers, read from poppy.json. */
+/** Where to reach what the company offers, read from poppy.json (and tasks). */
 export interface Endpoints {
 	mcp?: string;
 	openapi?: string;
 	conversations?: string;
 	operations?: string;
+	/** operations extension version chosen from the document, when listed. */
+	operationsVersion?: string;
 	browserSession?: string;
-	mediated?: string;
+	tasks?: string;
+	/** Filled after GET tasks.endpoint (spec 9). */
 	feedback?: string;
-	excludedTasks?: string;
+	/** Mediated Sign-In extension fields, when listed (no separate endpoint). */
+	mediated?: { version: string; scopes: string[]; fields: { name: string; label: string; secret: boolean }[] };
 }
 
-/** A Session's own DPoP key pair (spec 4.3). Its thumbprint, `jkt`, names the Session at the Company. */
-export interface SessionKey {
+/** A key pair, with both halves as JWKs. */
+export type Keys = Awaited<ReturnType<typeof generateKeyPair>> & { publicJwk: JWK; privateJwk: JWK };
+
+/**
+ * A Session the agent holds locally (spec 5): random sid, User ID, and the
+ * delegated key that signs its Session JWTs. The company starts the Session
+ * on the first request that carries a new sid.
+ */
+export interface Session {
+	sid: string;
+	userId: string;
+	agentId?: string;
+	/** Delegated EC key; Session JWT kid is its thumbprint. */
+	delegated: Keys;
+	/** Compact poppy-delegation+jwt naming the delegated public key. */
+	delegation: string;
+	/** Thumbprint of the delegated public key. */
+	jkt: string;
+}
+
+/** A DPoP key for one User ID (spec 4.5). Separate from Session delegated keys. */
+export interface DpopKey {
 	jkt: string;
 	keys: Keys;
 }
@@ -88,35 +119,37 @@ export interface TokenResponse {
 	access_token: string;
 	token_type: "DPoP" | "Bearer";
 	expires_in: number;
-	/** Absent on a signed-out token, and on a signed-in one granted exactly the scopes requested. */
+	/** Absent when every requested scope was granted. */
 	scope?: string;
-	/** The Account Token, after a sign-in. */
 	refresh_token?: string;
 	refresh_token_expires_in?: number;
-	/** Not from the Company: the Session Key this agent bound the token to, which names its Session. */
-	session: SessionKey;
+	/** Not from the Company: the Session this agent will send with the token. */
+	session: Session;
 }
 
 export interface ConversationMessage {
-	id: string;
-	/** Who wrote it: `type` always; Company messages may add `id`, `name` and `image` (spec 7.4). */
+	/** Who wrote it: `type` always; Company messages may add `id`, `name` and `image` (spec 8.4). */
 	author: { type: "agent" | "human"; id?: string; name?: string; image?: string };
 	text?: string;
 	data?: Record<string, unknown>;
 	context?: Record<string, unknown>;
+	as_of_cursor?: string;
+	extensions?: Record<string, unknown>;
 }
 
 export interface ConversationEvent {
 	id: string;
 	type: string;
 	created_at: string;
-	message?: ConversationMessage & { role: "user" | "company"; operation?: Operation };
-	status?: string;
+	message?: ConversationMessage & { id?: string; role: "user" | "company"; as_of_request?: string };
+	handoff?: string;
 	responder?: string;
+	closed?: boolean;
 	error?: string;
 	scope?: string;
 	reason?: string;
 	conversation_id?: string;
+	protocol_version?: string;
 }
 
 export interface EventPage {
@@ -124,42 +157,41 @@ export interface EventPage {
 	events: ConversationEvent[];
 	cursor: string | null;
 	has_more: boolean;
-	status: string;
+	working: boolean;
+	handoff: string;
 	responder: string;
+	closed: boolean;
 }
 
-/** A POST's answer: conversation_id, status and responder, plus a read's fields when `wait` was sent. */
+/** A POST's answer: conversation_id alone, or a read's fields when `wait` was sent. */
 export interface ConversationReply extends Partial<EventPage> {
 	httpStatus: number;
 	conversation_id: string;
-	status: string;
-	responder: string;
 }
 
-/** An operation, as the operations extension defines it. */
+/** An operation as the operations extension (v3) returns it. */
 export interface Operation {
 	operation_id: string;
-	revision: number;
-	state: "proposed" | "in_progress" | "succeeded" | "failed" | "cancelled" | "expired";
-	summary: string;
-	terms?: Record<string, unknown>;
-	expires_at?: string;
-	user_approval_required?: boolean;
-	url?: string;
-	confirmation: { revision: number; approved_by: string; confirmed_at: string } | null;
-	result: { summary: string; data?: Record<string, unknown> } | null;
+	revision: string;
+	summary?: string;
+	terms: Record<string, unknown>;
+	expires_at: string;
+	/** Present when looking up an approved website operation. */
+	status?: "approved" | "performing" | "performed";
 }
 
-export interface OperationReply {
-	operation: Operation;
-	retryAfter: string | null;
+export interface Approval {
+	operation_id: string;
+	revision: string;
+	approver: "user" | "agent";
+	approved_at?: number;
+	input_type?: string;
+	reference?: string;
 }
 
 export type MediatedResponse =
-	| ({ status: "complete" } & Omit<TokenResponse, "session"> & { session?: SessionKey })
-	| { status: "code_required"; sign_in_id: string; code?: { sent_to: string }; expires_at: string }
-	| { status: "failed" | "expired" }
-	| { error: string; error_description?: string };
+	| ({ status: "complete" } & Omit<TokenResponse, "session"> & { session?: Session })
+	| { error: string; error_description?: string; sign_in_id?: string; sent_to?: string; expires_in?: number; [k: string]: unknown };
 
 export interface DeviceAuthorization {
 	device_code: string;
@@ -170,31 +202,40 @@ export interface DeviceAuthorization {
 	interval: number;
 }
 
-/** A Direct Sign-In request, with the PKCE verifier to send at the exchange and the Session Key the code is bound to. */
+/** A Direct Sign-In request, with the PKCE verifier and the Session the tokens will use. */
 export interface AuthorizationRequest {
 	url: string;
 	state: string;
 	verifier: string;
 	redirectUri: string;
-	session: SessionKey;
+	session: Session;
 }
 
-/** An alternative way to do a task (spec 8.2). */
+/** An alternative way to do a task (spec 9.2). */
 export interface Alternative {
 	instructions?: string;
 	references?: ({ type: "openapi"; url: string; operation_id: string } | { type: "mcp"; url: string; tool: string } | { type: "web"; url: string } | { type: string; url?: string })[];
 }
 
-/** Options for signing an assertion (client, session or browser). Defaults produce a valid one. */
+/** Body of GET tasks.endpoint (spec 9). */
+export interface TasksDocument {
+	excluded_tasks?: { task: string; alternative?: Alternative }[];
+	skill_index?: unknown;
+	feedback?: { endpoint: string };
+	private?: boolean;
+	[member: string]: unknown;
+}
+
+/** Options for signing an assertion (client or delegation). Defaults produce a valid one. */
 export interface AssertionOptions {
-	/** Seconds between iat and exp. Default 60. */
+	/** Seconds between iat and exp. Default 60 for client assertions; 24h for delegations. */
 	lifetime?: number;
 	jti?: string;
 	/** Seconds to add to iat (and exp) to pre-date or post-date the assertion. */
 	iatOffset?: number;
 	/** "none" produces an unsigned token. */
 	alg?: "ES256" | "none";
-	/** Header typ. Default JWT. */
+	/** Header typ. Default JWT for client assertions. */
 	typ?: string;
 	/** Extra protected header members, e.g. an embedded jwk. */
 	header?: Partial<JWTHeaderParameters>;
@@ -206,44 +247,91 @@ export interface AssertionOptions {
 /** A ready-made assertion, or how to bend the default one. */
 export type AssertionSpec = string | (AssertionOptions & { subject?: string; audience?: string });
 
-/** Options for a DPoP proof. Defaults produce a valid one. */
-export interface ProofOptions {
-	accessToken?: string;
-	/** The Session Key to sign with. Default: the key the access token is bound to, or the newest Session's. */
-	session?: SessionKey;
-	nonce?: string;
+/** Options for a Session JWT. Defaults produce a valid one for the request. */
+export interface SessionJwtOptions {
+	session?: Session;
+	accessToken?: string | null;
 	/** Override htm (otherwise the request method). */
 	htm?: string;
 	/** Override htu (otherwise the request URL without query). */
 	htu?: string;
-	/** Seconds to add to iat (negative for the past). */
 	iatOffset?: number;
 	jti?: string;
-	/** Put the private key in the header jwk. */
+	typ?: string;
+	alg?: "ES256" | "none";
+	aud?: string;
+	iss?: string;
+	sid?: string;
+	sub?: string;
+	agentId?: string | null;
+	/** Override ath, or null to force omit. */
+	ath?: string | null;
+	/** Omit poppy_dlg from the header. */
+	omitDlg?: boolean;
+	/** Sign with the jwks_uri key instead of the delegated key. */
+	signWithJwks?: boolean;
+	/** Put a different kid than the delegated thumbprint. */
+	wrongKid?: boolean;
+	header?: Partial<JWTHeaderParameters>;
+	claims?: Record<string, unknown>;
+	/** Ready-made Session JWT string (skips signing). */
+	raw?: string;
+}
+
+/** Options for a DPoP proof. Defaults produce a valid one. */
+export interface ProofOptions {
+	accessToken?: string;
+	/** The DPoP key to sign with. Default: the key bound to the access token, or the User's. */
+	dpop?: DpopKey;
+	nonce?: string;
+	htm?: string;
+	htu?: string;
+	iatOffset?: number;
+	jti?: string;
 	leakPrivateKey?: boolean;
-	/** Sign with a different key than the header jwk. */
 	wrongSigningKey?: boolean;
-	/** Prove with another key pair entirely: valid proof, wrong key for the token. */
 	otherKey?: boolean;
-	/** Override ath. */
 	ath?: string;
 }
 
 export interface TokenRequestOptions {
-	/** The Session Key that names the Session and signs the proof. Default a new one: a new Session. */
-	session?: SessionKey;
-	/** Asks for a token for one service, such as the MCP server's URL (spec 4.3). */
+	/** The Session to attach to the returned tokens. Default a new one. */
+	session?: Session;
+	/** Asks for a token for one service, such as the MCP server's URL (spec 4.5). */
 	resource?: string;
 	/** The DPoP proof, how to bend the default one, or null for none. */
 	dpop?: ProofOptions | string | null;
+	/** DPoP key to bind; default the Session's userId's key. */
+	dpopKey?: DpopKey;
 	clientAssertion?: AssertionSpec;
 	/** Form fields to drop. */
 	omit?: string[];
 }
 
-export interface StartSessionOptions extends TokenRequestOptions {
-	/** The session assertion; `subject` presents another user id than this agent's own. */
-	assertion?: AssertionSpec;
+export interface StartSessionOptions {
+	/** Reuse this Session (same sid / delegated key). */
+	session?: Session;
+	userId?: string;
+	agentId?: string;
+	/** Override the random sid. */
+	sid?: string;
+	/** Bend the delegation that vouches for the delegated key. */
+	delegation?: AssertionOptions;
+}
+
+export interface SessionRequestOptions {
+	accessToken?: string | null;
+	tokenType?: "DPoP" | "Bearer";
+	/** Extensions to declare; default the agent's configured ones (plus operations when talking to that endpoint). */
+	extensions?: Record<string, string> | null;
+	approval?: Approval;
+	/** How to bend the Session JWT, a ready-made string, or null to omit Poppy-Session. */
+	sessionJwt?: SessionJwtOptions | string | null;
+	/** Omit Poppy-Version. */
+	omitVersion?: boolean;
+	/** Override Poppy-Version. */
+	version?: string;
+	dpop?: ProofOptions | string | null;
 }
 
 export class PapError extends Error {
@@ -274,9 +362,6 @@ export async function readBody(response: Response): Promise<unknown> {
 	}
 }
 
-/** A key pair, with both halves as JWKs. */
-export type Keys = Awaited<ReturnType<typeof generateKeyPair>> & { publicJwk: JWK; privateJwk: JWK };
-
 type AgentKeys = { signing: Keys; stranger: Keys };
 
 async function newKeys(kid?: string): Promise<Keys> {
@@ -287,8 +372,16 @@ async function newKeys(kid?: string): Promise<Keys> {
 	return { ...pair, publicJwk, privateJwk };
 }
 
+/** Public JWK members only (no private key material) for cnf.jwk. */
+function publicOnly(jwk: JWK): JWK {
+	const { kty, crv, x, y } = jwk;
+	return { kty, crv, x, y };
+}
+
 const MCP_VERSION = "2025-06-18";
 const FORM = { "content-type": "application/x-www-form-urlencoded" };
+const MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in";
+const DELEGATION_LIFETIME = 24 * 3600;
 
 /** A Personal Agent bound to the company it discovered. */
 export class TestAgent {
@@ -299,9 +392,13 @@ export class TestAgent {
 	private discovered?: Discovery;
 	/** Stable pairwise user id per company issuer. Random, never derived from PII. */
 	private readonly userIds = new Map<string, string>();
-	/** The Session Key each token is bound to, so proofs are signed with the right one. */
-	private readonly tokenKeys = new Map<string, SessionKey>();
-	private latestKey?: SessionKey;
+	/** One DPoP key per User ID. */
+	private readonly dpopKeys = new Map<string, DpopKey>();
+	/** Access token → Session and token_type, so resource requests know what to send. */
+	private readonly tokenMeta = new Map<string, { session: Session; tokenType: "DPoP" | "Bearer"; userId: string }>();
+	private latestSession?: Session;
+	/** feedback.endpoint from the last tasks fetch in a Session (keyed by sid). */
+	private readonly feedbackBySid = new Map<string, string>();
 
 	/** Use TestAgent.create(), which makes the keys. */
 	constructor(options: TestAgentOptions, keys: AgentKeys) {
@@ -323,7 +420,7 @@ export class TestAgent {
 		return new URL("callback", this.clientId).toString();
 	}
 
-	/** The document to serve at clientId. */
+	/** The document to serve at clientId. Extensions are not included (spec 4.1). */
 	clientMetadata(): { client_id: string; client_name: string; logo_uri: string } & Record<string, unknown> {
 		return {
 			client_id: this.clientId,
@@ -332,7 +429,6 @@ export class TestAgent {
 			jwks_uri: this.jwksUri,
 			redirect_uris: [this.redirectUri],
 			token_endpoint_auth_method: "private_key_jwt",
-			...(this.options.extensions ? { extensions: this.options.extensions } : {}),
 		};
 	}
 
@@ -354,7 +450,7 @@ export class TestAgent {
 		const served = wellKnown.url ? new URL(wellKnown.url) : new URL("/.well-known/poppy.json", base);
 		if (served.pathname !== "/.well-known/poppy.json" || served.search) throw new Error(`poppy.json was redirected to ${served}, which is not a well-known URL`);
 		const poppy = await this.expectJson<PoppyDocument>(wellKnown);
-		if (poppy.protocol_version !== "0.3") throw new Error(`unsupported protocol_version ${poppy.protocol_version}`);
+		if (poppy.protocol_version !== "0.4") throw new Error(`unsupported protocol_version ${poppy.protocol_version}`);
 		// Domains are compared ignoring case, with no other normalization.
 		if (poppy.organization.domain.toLowerCase() !== served.hostname.toLowerCase()) throw new Error("organization.domain is not the host that served poppy.json");
 		if (!poppy.auth?.issuer) throw new Error("poppy.json has no auth.issuer");
@@ -362,21 +458,30 @@ export class TestAgent {
 		const issuer = new URL(poppy.auth.issuer);
 		// RFC 8414: the well-known part goes between the issuer's host and its path.
 		const metadataUrl = `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname === "/" ? "" : issuer.pathname}`;
-		const metadata = await this.getJson<AuthorizationServerMetadata>(metadataUrl);
+		const metadata = parseAuthorizationServerMetadata(await this.getJson<Record<string, unknown>>(metadataUrl));
 		if (metadata.issuer !== poppy.auth.issuer) throw new Error("issuer metadata does not match auth.issuer");
 		const resource = `https://${poppy.organization.domain}`.toLowerCase();
-		const listed = (metadata.protected_resources ?? []).some((r) => /^https:\/\/[^/]+$/.test(r) && r.toLowerCase() === resource);
+		const listed = metadata.protected_resources.some((r) => /^https:\/\/[^/]+$/.test(r) && r.toLowerCase() === resource);
 		if (!listed) throw new Error("protected_resources does not list this domain");
+
 		const api = (type: string) => poppy.apis?.find((entry) => entry.type === type)?.url;
+		const operations = pickExtension(poppy.extensions?.operations, "3") ?? pickExtension(poppy.extensions?.operations);
+		const mediated = pickExtension(poppy.extensions?.["mediated-sign-in"], "1") ?? pickExtension(poppy.extensions?.["mediated-sign-in"]);
 		const endpoints: Endpoints = {
 			mcp: api("mcp"),
 			openapi: api("openapi"),
 			conversations: poppy.agent?.protocols?.find((p) => p.type === "poppy")?.endpoint,
-			operations: poppy.extensions?.operations?.endpoint,
+			operations: typeof operations?.endpoint === "string" ? operations.endpoint : undefined,
+			operationsVersion: typeof operations?.version === "string" ? operations.version : undefined,
 			browserSession: poppy.web?.browser_session_endpoint,
-			mediated: poppy.auth.mediated?.endpoint,
-			feedback: poppy.feedback?.endpoint,
-			excludedTasks: poppy.excluded_tasks?.url,
+			tasks: poppy.tasks?.endpoint,
+			mediated: mediated
+				? {
+						version: String(mediated.version),
+						scopes: Array.isArray(mediated.scopes) ? (mediated.scopes as string[]) : [],
+						fields: Array.isArray(mediated.fields) ? (mediated.fields as { name: string; label: string; secret: boolean }[]) : [],
+					}
+				: undefined,
 		};
 		this.discovered = { origin: base.origin, poppy, metadata, endpoints };
 		return this.discovered;
@@ -395,7 +500,7 @@ export class TestAgent {
 	/** An endpoint the company must offer for the call at hand. */
 	endpoint(name: keyof Endpoints): string {
 		const url = this.endpoints[name];
-		if (!url) throw new Error(`the company offers no ${name} endpoint`);
+		if (typeof url !== "string" || !url) throw new Error(`the company offers no ${name} endpoint`);
 		return url;
 	}
 
@@ -407,44 +512,74 @@ export class TestAgent {
 		return id;
 	}
 
-	/** A new Session Key. Each Session has its own, and a key never serves another Session (spec 4.3). */
-	async newSessionKey(): Promise<SessionKey> {
+	/** A new DPoP key. Each User ID has one; a key never serves another User ID (spec 4.5). */
+	async newDpopKey(): Promise<DpopKey> {
 		const keys = await newKeys();
 		return { jkt: await calculateJwkThumbprint(keys.publicJwk, "sha256"), keys };
 	}
 
-	/** Starts a signed-out Session with a new Session Key, or with `session` renews that Session (spec 4.2). */
-	async startSession(options: StartSessionOptions = {}): Promise<TokenResponse> {
-		const params: Record<string, string> = {
-			grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-			assertion: await this.assertion(options.assertion, this.userId, this.company.metadata.issuer),
-		};
-		return this.token(params, options);
+	/** The DPoP key for a User ID, creating one if needed. */
+	async dpopKeyFor(userId: string): Promise<DpopKey> {
+		const existing = this.dpopKeys.get(userId);
+		if (existing) return existing;
+		const key = await this.newDpopKey();
+		this.dpopKeys.set(userId, key);
+		return key;
 	}
 
-	/** POSTs a grant to the token endpoint, authenticated with a client assertion and bound with a proof from the Session Key. */
-	async tokenRequest(params: Record<string, string>, options: TokenRequestOptions = {}): Promise<{ response: Response; session: SessionKey }> {
+	/**
+	 * Starts a Session locally: random sid and a delegated key for the User.
+	 * No token endpoint call — the company starts the Session on the first
+	 * request that carries the sid (spec 5).
+	 */
+	async startSession(options: StartSessionOptions = {}): Promise<Session> {
+		if (options.session) {
+			this.latestSession = options.session;
+			return options.session;
+		}
+		const userId = options.userId ?? this.userId;
+		const delegated = await newKeys();
+		const jkt = await calculateJwkThumbprint(delegated.publicJwk, "sha256");
+		const delegation = await this.signDelegation(delegated.publicJwk, options.delegation);
+		const session: Session = {
+			sid: options.sid ?? randomJti(),
+			userId,
+			...(options.agentId !== undefined ? { agentId: options.agentId } : {}),
+			delegated,
+			delegation,
+			jkt,
+		};
+		this.latestSession = session;
+		return session;
+	}
+
+	/** POSTs a grant to the token endpoint, authenticated with a client assertion and bound with a DPoP proof. */
+	async tokenRequest(params: Record<string, string>, options: TokenRequestOptions = {}): Promise<{ response: Response; session: Session }> {
 		const url = this.company.metadata.token_endpoint;
-		const session = options.session ?? (await this.newSessionKey());
+		const session = options.session ?? (await this.startSession());
+		const dpopKey = options.dpopKey ?? (await this.dpopKeyFor(session.userId));
 		const { resource, dpop = {} } = options;
-		const proof = typeof dpop === "object" && dpop !== null ? await this.dpopProof("POST", url, { session, ...dpop }) : dpop;
+		const proof =
+			typeof dpop === "object" && dpop !== null
+				? await this.dpopProof("POST", url, { dpop: dpopKey, ...dpop })
+				: dpop;
 		const response = await this.formPost(url, resource ? { ...params, resource } : params, options, proof ? { dpop: proof } : {});
 		return { response, session };
 	}
 
 	async token(params: Record<string, string>, options: TokenRequestOptions = {}): Promise<TokenResponse> {
 		const { response, session } = await this.tokenRequest(params, options);
-		const token = { ...(await this.expectJson<Omit<TokenResponse, "session">>(response)), session };
-		this.tokenKeys.set(token.access_token, session);
-		this.latestKey = session;
+		const body = await this.expectJson<Omit<TokenResponse, "session">>(response);
+		const token: TokenResponse = { ...body, session };
+		this.rememberToken(token);
 		return token;
 	}
 
-	/** Starts Direct Sign-In (spec 4.5) for a Session: the URL to open in the User's browser, with PKCE S256 and the code bound to the Session Key. */
+	/** Starts Direct Sign-In (spec 4.2) for a Session: the URL to open, with PKCE S256 and dpop_jkt of the User's DPoP key. */
 	async authorizationRequest(
 		scope: string,
-		session: SessionKey,
-		options: { redirectUri?: string; challengeMethod?: string; omitChallenge?: boolean; omitJkt?: boolean } = {},
+		session: Session,
+		options: { redirectUri?: string; challengeMethod?: string; omitChallenge?: boolean; omitJkt?: boolean; dpopKey?: DpopKey } = {},
 	): Promise<AuthorizationRequest> {
 		const endpoint = this.company.metadata.authorization_endpoint;
 		if (!endpoint) throw new Error("the company does not offer Direct Sign-In");
@@ -457,17 +592,20 @@ export class TestAgent {
 			url.searchParams.set("code_challenge", await sha256b64url(verifier));
 			url.searchParams.set("code_challenge_method", options.challengeMethod ?? "S256");
 		}
-		if (!options.omitJkt) url.searchParams.set("dpop_jkt", session.jkt);
+		if (!options.omitJkt) {
+			const dpop = options.dpopKey ?? (await this.dpopKeyFor(session.userId));
+			url.searchParams.set("dpop_jkt", dpop.jkt);
+		}
 		return { url: url.toString(), state, verifier, redirectUri, session };
 	}
 
-	/** Exchanges a Direct Sign-In code with a proof from the request's Session Key, signing that Session in. */
+	/** Exchanges a Direct Sign-In code with a DPoP proof from the User's DPoP key. */
 	exchangeCode(request: AuthorizationRequest, code: string, options: TokenRequestOptions & { verifier?: string } = {}): Promise<TokenResponse> {
 		const params = { grant_type: "authorization_code", code, code_verifier: options.verifier ?? request.verifier, redirect_uri: request.redirectUri };
 		return this.token(params, { session: request.session, ...options });
 	}
 
-	/** Starts Device Sign-In (spec 4.6). */
+	/** Starts Device Sign-In (spec 4.3). */
 	async deviceAuthorization(scope: string): Promise<DeviceAuthorization> {
 		const endpoint = this.company.metadata.device_authorization_endpoint;
 		if (!endpoint) throw new Error("the company does not offer Device Sign-In");
@@ -476,122 +614,210 @@ export class TestAgent {
 
 	/**
 	 * Whether a device sign-in link may be shown for this company: its host is
-	 * the issuer's host or the host of a URL in `protected_resources`, or a
-	 * subdomain of either (spec 4.6).
+	 * the issuer's host or organization.domain, or a subdomain of either (spec 4.3).
 	 */
 	mayShowVerificationUri(uri: string): boolean {
 		const host = URL.parse(uri)?.hostname.toLowerCase();
 		if (!host) return false;
-		const hosts = [this.company.metadata.issuer, ...this.company.metadata.protected_resources].flatMap((u) => URL.parse(u)?.hostname.toLowerCase() ?? []);
+		const hosts = [this.company.metadata.issuer, `https://${this.company.poppy.organization.domain}`].flatMap((u) => URL.parse(u)?.hostname.toLowerCase() ?? []);
 		return hosts.some((h) => host === h || host.endsWith(`.${h}`));
 	}
 
-	/** One poll of the token endpoint for a Device Sign-In, with a proof from the Session Key to sign in. */
-	pollDevice(deviceCode: string, session: SessionKey, options: TokenRequestOptions = {}): Promise<TokenResponse> {
+	/** One poll of the token endpoint for a Device Sign-In. */
+	pollDevice(deviceCode: string, session: Session, options: TokenRequestOptions = {}): Promise<TokenResponse> {
 		return this.token({ grant_type: "urn:ietf:params:oauth:grant-type:device_code", device_code: deviceCode }, { session, ...options });
 	}
 
-	/** Uses an Account Token (spec 4.8): with `session`, for that Session; otherwise it starts a new signed-in Session. */
-	refresh(accountToken: string, options: TokenRequestOptions & { scope?: string } = {}): Promise<TokenResponse> {
-		const params: Record<string, string> = { grant_type: "refresh_token", refresh_token: accountToken };
+	/** Uses a refresh token (spec 4.4). With `session`, attaches tokens to that Session; otherwise starts a new one. */
+	refresh(refreshToken: string, options: TokenRequestOptions & { scope?: string } = {}): Promise<TokenResponse> {
+		const params: Record<string, string> = { grant_type: "refresh_token", refresh_token: refreshToken };
 		if (options.scope !== undefined) params.scope = options.scope;
 		return this.token(params, options);
 	}
 
-	/** Signs the User out by revoking the Account Token (spec 4.9). */
-	async revoke(accountToken: string): Promise<void> {
-		await this.expectJson(await this.formPost(this.company.metadata.revocation_endpoint, { token: accountToken, token_type_hint: "refresh_token" }));
+	/** Signs the User out by revoking the refresh token (spec 5.5). */
+	async revoke(refreshToken: string): Promise<void> {
+		await this.expectJson(await this.formPost(this.company.metadata.revocation_endpoint, { token: refreshToken, token_type_hint: "refresh_token" }));
+	}
+
+	/** Step 2 of browser join (spec 6): POST `{browser_session_endpoint}/authorize` with the one-time code. */
+	authorizeBrowserCode(session: Session, code: string, options: SessionRequestOptions = {}): Promise<Response> {
+		const endpoint = this.endpoint("browserSession");
+		return this.sessionJson(`${endpoint.replace(/\/$/, "")}/authorize`, session, { code }, options);
 	}
 
 	/**
-	 * Joins a browser to a Session (spec 5): loads the browser-session page in
-	 * that browser, signs a proof over its code with the Session Key, and has
-	 * the browser submit the form. Returns the Company's response.
+	 * Joins a browser to a Session (spec 6): loads the browser-session page,
+	 * authorizes the one-time code at `/authorize` with Poppy-Session (and an
+	 * access token with poppy:browser-sign-in when signed in), then has the
+	 * browser submit the form with the code only (no DPoP proof).
 	 */
-	async joinBrowser(browser: Browser, session: SessionKey, options: { proof?: ProofOptions; code?: string } = {}): Promise<Response> {
-		const form = await browser.openBrowserSession(this.endpoint("browserSession"));
+	async joinBrowser(
+		browser: Browser,
+		session: Session,
+		options: { accessToken?: string | null; code?: string; authorize?: SessionRequestOptions; formCode?: string } = {},
+	): Promise<Response> {
+		const endpoint = this.endpoint("browserSession");
+		const form = await browser.openBrowserSession(endpoint);
 		const code = options.code ?? form.code;
-		const proof = await this.dpopProof("POST", form.action, { session, nonce: code, ...options.proof });
-		return browser.post(form.action, new URLSearchParams({ code, proof }));
+		const authorized = await this.authorizeBrowserCode(session, code, { accessToken: options.accessToken, ...options.authorize });
+		// 204 No Content on success; anything else is a refusal.
+		if (!authorized.ok) throw new PapError(authorized.status, await readBody(authorized), authorized.headers.get("www-authenticate"));
+		return browser.post(form.action, new URLSearchParams({ code: options.formCode ?? code }));
 	}
 
-	/** Reads the tasks the company chose not to offer (spec 8.1), with no token. */
-	async excludedTasks(): Promise<{ tasks: { task: string; alternative?: Alternative }[] }> {
-		return this.getJson(this.endpoint("excludedTasks"));
+	/** GET tasks.endpoint with Poppy-Session and no access token (spec 9). Remembers feedback.endpoint for this Session. */
+	async tasks(session: Session, options: SessionRequestOptions = {}): Promise<TasksDocument> {
+		const doc = await this.expectJson<TasksDocument>(await this.sessionFetch(this.endpoint("tasks"), session, { method: "GET" }, { accessToken: null, ...options }));
+		const feedback = doc.feedback?.endpoint;
+		if (typeof feedback === "string") {
+			this.feedbackBySid.set(session.sid, feedback);
+			this.company.endpoints.feedback = feedback;
+		}
+		return doc;
 	}
 
-	/** Reports a task the User couldn't do (spec 8.3). Returns the HTTP status and the alternative, if the company sent one. */
-	async feedback(token: string, report: { kind: string; task: string; description: string }): Promise<{ httpStatus: number; alternative: Alternative | null }> {
-		const response = await this.dpopJson(this.endpoint("feedback"), token, report);
+	/** Reports a task the User couldn't do (spec 9.3). Uses feedback.endpoint from the tasks response. */
+	async feedback(
+		session: Session,
+		report: { kind: string; task: string; description: string },
+		options: SessionRequestOptions & { accessToken?: string | null } = {},
+	): Promise<{ httpStatus: number; alternative: Alternative | null }> {
+		const endpoint = this.feedbackBySid.get(session.sid) ?? this.endpoints.feedback;
+		if (!endpoint) throw new Error("call tasks() first, or the tasks response listed no feedback.endpoint");
+		const response = await this.sessionJson(endpoint, session, report, { accessToken: null, ...options });
 		const body = await this.parse<Alternative | null>(response);
 		if (!response.ok) throw new PapError(response.status, body, response.headers.get("www-authenticate"));
 		return { httpStatus: response.status, alternative: body };
 	}
 
-	/** Mediated Sign-In (spec 4.7): sends credentials, or a one-time code for `signInId`, with a DPoP Session Token. */
+	/**
+	 * Mediated Sign-In (extension): token endpoint grant. Credentials go only
+	 * to the issuer's token_endpoint. No Poppy-Extensions (the grant type is enough).
+	 */
 	async mediatedSignIn(
-		token: string,
-		body: { scope: string; credentials: Record<string, string> } | { code: string },
-		signInId?: string,
+		session: Session,
+		body: { scope: string; credentials: Record<string, string> } | { sign_in_id: string; one_time_code: string },
+		options: TokenRequestOptions = {},
 	): Promise<{ httpStatus: number; headers: Headers; body: MediatedResponse }> {
-		const endpoint = this.endpoint("mediated");
-		const response = await this.dpopJson(signInId ? `${endpoint}/${encodeURIComponent(signInId)}` : endpoint, token, body);
-		const parsed = await this.parse<MediatedResponse>(response);
-		// The signed-in token is bound to the same Session Key as the token that signed in.
-		const session = this.tokenKeys.get(token);
-		if (session && "status" in parsed && parsed.status === "complete") {
-			this.tokenKeys.set(parsed.access_token, session);
-			return { httpStatus: response.status, headers: response.headers, body: { ...parsed, session } };
+		const params: Record<string, string> = { grant_type: MEDIATED_GRANT };
+		if ("credentials" in body) {
+			params.scope = body.scope;
+			Object.assign(params, body.credentials);
+		} else {
+			params.sign_in_id = body.sign_in_id;
+			params.one_time_code = body.one_time_code;
 		}
-		return { httpStatus: response.status, headers: response.headers, body: parsed };
+		const { response, session: used } = await this.tokenRequest(params, { session, ...options });
+		const parsed = await this.parse<Record<string, unknown>>(response);
+		if (response.ok && typeof parsed === "object" && parsed !== null && typeof parsed.access_token === "string") {
+			const token = { ...(parsed as Omit<TokenResponse, "session">), session: used };
+			this.rememberToken(token);
+			return { httpStatus: response.status, headers: response.headers, body: { status: "complete", ...token } };
+		}
+		return { httpStatus: response.status, headers: response.headers, body: parsed as MediatedResponse };
 	}
 
-	/** Reads an operation at the operations endpoint (operations extension 6). */
-	async operation(token: string, operationId: string): Promise<OperationReply> {
-		return this.operationReply(await this.dpopFetch(this.operationUrl(operationId), token));
+	/** Retries a request with Poppy-Approval (operations extension v3). */
+	async approve(
+		session: Session,
+		request: { method?: string; url: string; body?: unknown; headers?: Record<string, string> },
+		approval: Approval,
+		options: SessionRequestOptions = {},
+	): Promise<Response> {
+		const method = request.method ?? "POST";
+		const init: RequestInit = {
+			method,
+			headers: { ...(request.body !== undefined ? { "content-type": "application/json" } : {}), ...request.headers },
+			...(request.body !== undefined ? { body: typeof request.body === "string" ? request.body : JSON.stringify(request.body) } : {}),
+		};
+		return this.sessionFetch(request.url, session, init, { ...options, approval });
 	}
 
-	/** Confirms an operation's revision (operations extension 5.2). */
-	async confirm(token: string, operation: Pick<Operation, "operation_id" | "revision">, approvedBy = "user"): Promise<OperationReply> {
-		const url = this.operationUrl(operation.operation_id, "/confirm");
-		return this.operationReply(await this.dpopJson(url, token, { revision: operation.revision, approved_by: approvedBy }));
+	/** Formats a Poppy-Approval dictionary (RFC 9651). */
+	approvalHeader(approval: Approval): string {
+		const parts = [
+			`operation_id=${sfString(approval.operation_id)}`,
+			`revision=${sfString(approval.revision)}`,
+			`approver=${sfString(approval.approver)}`,
+		];
+		if (approval.approved_at !== undefined) parts.push(`approved_at=${approval.approved_at}`);
+		if (approval.input_type !== undefined) parts.push(`input_type=${sfString(approval.input_type)}`);
+		if (approval.reference !== undefined) parts.push(`reference=${sfString(approval.reference)}`);
+		return parts.join(", ");
 	}
 
-	/** Declines or stops an operation (operations extension 7). */
-	async cancel(token: string, operationId: string): Promise<Operation> {
-		return this.expectJson(await this.dpopFetch(this.operationUrl(operationId, "/cancel"), token, { method: "POST" }));
+	/** Looks up a website operation by reference at the operations endpoint. */
+	async operationByRef(session: Session, ref: string, options: SessionRequestOptions = {}): Promise<Response> {
+		return this.sessionJson(this.endpoint("operations"), session, { ref }, {
+			extensions: { ...this.defaultExtensions(), operations: this.endpoints.operationsVersion ?? "3" },
+			...options,
+		});
 	}
 
-	/** Starts a conversation, or a Direct Conversation with `parent` (spec 7.3, 7.10). */
-	startConversation(token: string, message: ConversationMessage, options: { parent?: string; wait?: number; cursor?: string } = {}): Promise<ConversationReply> {
-		return this.conversationPost("", token, options.parent ? { message, parent_conversation_id: options.parent } : { message }, options);
+	/** Starts a conversation, or a Direct Conversation with `parent` (spec 8.3, 8.10). */
+	startConversation(
+		session: Session,
+		message: ConversationMessage | undefined,
+		options: SessionRequestOptions & { parent?: string; userRequestedEventId?: string; wait?: number; cursor?: string; id?: string } = {},
+	): Promise<ConversationReply> {
+		const body: Record<string, unknown> = { id: options.id ?? this.requestId() };
+		if (message) body.message = message;
+		if (options.parent) body.parent_conversation_id = options.parent;
+		if (options.userRequestedEventId) body.user_requested_event_id = options.userRequestedEventId;
+		return this.conversationPost("", session, body, options);
 	}
 
-	sendMessage(token: string, conversationId: string, message: ConversationMessage, options: { wait?: number; cursor?: string } = {}): Promise<ConversationReply> {
-		return this.conversationPost(`/${conversationId}/messages`, token, { message }, options);
+	sendMessage(
+		session: Session,
+		conversationId: string,
+		message: ConversationMessage,
+		options: SessionRequestOptions & { wait?: number; cursor?: string; id?: string } = {},
+	): Promise<ConversationReply> {
+		return this.conversationPost(`/${conversationId}/messages`, session, { id: options.id ?? this.requestId(), message }, options);
 	}
 
-	handoff(token: string, conversationId: string): Promise<ConversationReply> {
-		return this.conversationPost(`/${conversationId}/handoff`, token, {});
+	handoff(session: Session, conversationId: string, options: SessionRequestOptions & { id?: string } = {}): Promise<ConversationReply> {
+		return this.conversationPost(`/${conversationId}/handoff`, session, { id: options.id ?? this.requestId() }, options);
 	}
 
-	closeConversation(token: string, conversationId: string): Promise<ConversationReply> {
-		return this.conversationPost(`/${conversationId}/close`, token, {});
+	cancelHandoff(session: Session, conversationId: string, options: SessionRequestOptions & { id?: string } = {}): Promise<ConversationReply> {
+		return this.conversationPost(`/${conversationId}/handoff/cancel`, session, { id: options.id ?? this.requestId() }, options);
 	}
 
-	/** Reads events after `cursor`, holding up to `wait` seconds (spec 7.5). */
-	async events(token: string, conversationId: string, options: { cursor?: string; wait?: number } = {}): Promise<EventPage> {
-		return this.expectJson(await this.dpopFetch(`${this.endpoint("conversations")}/${conversationId}/events${query(options)}`, token));
+	closeConversation(session: Session, conversationId: string, options: SessionRequestOptions & { id?: string } = {}): Promise<ConversationReply> {
+		return this.conversationPost(`/${conversationId}/close`, session, { id: options.id ?? this.requestId() }, options);
 	}
 
-	/** A message from this agent with a fresh 128-bit ID. */
+	/** Reads events after `cursor`, holding up to `wait` seconds (spec 8.5). */
+	async events(
+		session: Session,
+		conversationId: string,
+		options: SessionRequestOptions & { cursor?: string; wait?: number } = {},
+	): Promise<EventPage> {
+		return this.expectJson(await this.sessionFetch(`${this.endpoint("conversations")}/${conversationId}/events${query(options)}`, session, { method: "GET" }, options));
+	}
+
+	/** A message from this agent (no id — the request id is the message id). */
 	message(text?: string, extra: Partial<ConversationMessage> = {}): ConversationMessage {
-		return { id: `msg_${randomJti()}`, author: { type: "agent" }, ...(text !== undefined ? { text } : {}), ...extra };
+		return { author: { type: "agent" }, ...(text !== undefined ? { text } : {}), ...extra };
 	}
 
-	/** Calls an MCP JSON-RPC method with a DPoP Session Token issued for the server, and returns its result. Notifications (no id) return undefined. */
-	async mcp<T = unknown>(url: string, token: string | null, method: string, params?: Record<string, unknown>, options: { notification?: boolean; scheme?: "DPoP" | "Bearer" } = {}): Promise<T> {
-		const response = await this.mcpRaw(url, token, method, params, options);
+	/** A fresh request id for conversation POSTs (spec 8.3). */
+	requestId(): string {
+		return `req_${randomJti()}`;
+	}
+
+	/** Calls an MCP JSON-RPC method with Poppy-Session and optional access token. */
+	async mcp<T = unknown>(
+		url: string,
+		session: Session,
+		token: string | null,
+		method: string,
+		params?: Record<string, unknown>,
+		options: SessionRequestOptions & { notification?: boolean } = {},
+	): Promise<T> {
+		const response = await this.mcpRaw(url, session, token, method, params, options);
 		if (options.notification) {
 			if (response.status !== 202) throw new PapError(response.status, await readBody(response), response.headers.get("www-authenticate"));
 			return undefined as T;
@@ -601,34 +827,140 @@ export class TestAgent {
 		return body.result;
 	}
 
-	/** The MCP handshake's first step. */
-	mcpInitialize(url: string, token: string): Promise<{ protocolVersion?: string; capabilities?: Record<string, unknown> }> {
-		return this.mcp(url, token, "initialize", { protocolVersion: MCP_VERSION, capabilities: {}, clientInfo: { name: "poppyseed-test-agent", version: "0.1.0" } });
+	mcpInitialize(url: string, session: Session, token: string | null, options: SessionRequestOptions = {}): Promise<{ protocolVersion?: string; capabilities?: Record<string, unknown> }> {
+		return this.mcp(url, session, token, "initialize", { protocolVersion: MCP_VERSION, capabilities: {}, clientInfo: { name: "poppyseed-test-agent", version: "0.4.0" } }, options);
 	}
 
-	/** One MCP request. With a token it carries a DPoP proof, unless `scheme` is Bearer. */
-	async mcpRaw(url: string, token: string | null, method: string, params?: Record<string, unknown>, options: { notification?: boolean; scheme?: "DPoP" | "Bearer" } = {}): Promise<Response> {
-		const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": MCP_VERSION };
+	async mcpRaw(
+		url: string,
+		session: Session,
+		token: string | null,
+		method: string,
+		params?: Record<string, unknown>,
+		options: SessionRequestOptions & { notification?: boolean } = {},
+	): Promise<Response> {
 		const message = options.notification ? { jsonrpc: "2.0", method, params } : { jsonrpc: "2.0", id: crypto.randomUUID(), method, params };
-		const init = { method: "POST", headers, body: JSON.stringify(message) };
-		if (!token) return this.fetcher(url, init);
-		if (options.scheme === "Bearer") return this.fetcher(url, { ...init, headers: { ...headers, authorization: `Bearer ${token}` } });
-		return this.dpopFetch(url, token, init);
+		return this.sessionFetch(
+			url,
+			session,
+			{
+				method: "POST",
+				headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-protocol-version": MCP_VERSION },
+				body: JSON.stringify(message),
+			},
+			{ accessToken: token, ...options },
+		);
 	}
 
-	/** Calls a DPoP-protected endpoint. */
-	async dpopFetch(url: string, token: string, init: RequestInit = {}, proof: ProofOptions = {}): Promise<Response> {
+	/**
+	 * Calls a protocol / API / extension endpoint with Poppy-Session and
+	 * Poppy-Version. Signed-in requests also send Authorization (and DPoP when
+	 * the token is DPoP-bound).
+	 */
+	async sessionFetch(url: string, session: Session, init: RequestInit = {}, options: SessionRequestOptions = {}): Promise<Response> {
 		const method = init.method ?? "GET";
 		const headers = new Headers(init.headers);
-		headers.set("authorization", `DPoP ${token}`);
-		headers.set("dpop", await this.dpopProof(method, url, { accessToken: token, ...proof }));
+		const accessToken = options.accessToken === undefined ? null : options.accessToken;
+
+		if (options.sessionJwt !== null) {
+			const jwt =
+				typeof options.sessionJwt === "string"
+					? options.sessionJwt
+					: await this.sessionJwt(method, url, { session, accessToken, ...options.sessionJwt });
+			headers.set("poppy-session", jwt);
+		}
+		if (!options.omitVersion) headers.set("poppy-version", options.version ?? PROTOCOL_VERSION);
+
+		const extensions = options.extensions === null ? undefined : (options.extensions ?? this.defaultExtensions());
+		if (extensions && Object.keys(extensions).length > 0) headers.set("poppy-extensions", formatExtensions(extensions));
+
+		if (options.approval) headers.set("poppy-approval", this.approvalHeader(options.approval));
+
+		if (accessToken) {
+			const meta = this.tokenMeta.get(accessToken);
+			const tokenType = options.tokenType ?? meta?.tokenType ?? "DPoP";
+			headers.set("authorization", `${tokenType} ${accessToken}`);
+			if (tokenType === "DPoP" && options.dpop !== null) {
+				const proof =
+					typeof options.dpop === "string"
+						? options.dpop
+						: await this.dpopProof(method, url, {
+								accessToken,
+								dpop: options.dpop?.dpop ?? (meta ? await this.dpopKeyFor(meta.userId) : await this.dpopKeyFor(session.userId)),
+								...options.dpop,
+							});
+				headers.set("dpop", proof);
+			}
+		}
+
 		return this.fetcher(url, { ...init, method, headers });
 	}
 
-	/** POSTs `body` as JSON to a DPoP-protected endpoint. */
+	/** POSTs `body` as JSON with Poppy-Session. */
+	sessionJson(url: string, session: Session, body: unknown, options: SessionRequestOptions = {}): Promise<Response> {
+		return this.sessionFetch(url, session, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, options);
+	}
+
+	/** @deprecated Prefer sessionFetch. Kept for checks that still say dpopFetch while migrating. */
+	dpopFetch(url: string, token: string, init: RequestInit = {}, proof: ProofOptions = {}): Promise<Response> {
+		const meta = this.tokenMeta.get(token);
+		const session = meta?.session ?? this.latestSession;
+		if (!session) throw new Error("no Session for this token; pass sessionFetch(session, …) instead");
+		return this.sessionFetch(url, session, init, { accessToken: token, dpop: proof });
+	}
+
+	/** @deprecated Prefer sessionJson. */
 	dpopJson(url: string, token: string, body: unknown, options: { headers?: Record<string, string>; proof?: ProofOptions } = {}): Promise<Response> {
-		const init = { method: "POST", headers: { "content-type": "application/json", ...options.headers }, body: JSON.stringify(body) };
-		return this.dpopFetch(url, token, init, options.proof);
+		const meta = this.tokenMeta.get(token);
+		const session = meta?.session ?? this.latestSession;
+		if (!session) throw new Error("no Session for this token; pass sessionJson(session, …) instead");
+		return this.sessionFetch(
+			url,
+			session,
+			{ method: "POST", headers: { "content-type": "application/json", ...options.headers }, body: JSON.stringify(body) },
+			{ accessToken: token, dpop: options.proof },
+		);
+	}
+
+	async sessionJwt(method: string, url: string, options: SessionJwtOptions = {}): Promise<string> {
+		if (options.raw) return options.raw;
+		const session = options.session ?? this.latestSession ?? (await this.startSession());
+		const parsed = new URL(url);
+		const claims: Record<string, unknown> = {
+			iss: options.iss ?? this.clientId,
+			aud: options.aud ?? this.company.metadata.issuer,
+			sid: options.sid ?? session.sid,
+			sub: options.sub ?? session.userId,
+			htm: options.htm ?? method,
+			htu: options.htu ?? `${parsed.origin}${parsed.pathname}`,
+			iat: Math.floor(Date.now() / 1000) + (options.iatOffset ?? 0),
+			jti: options.jti ?? randomJti(),
+			...options.claims,
+		};
+		const agentId = options.agentId === undefined ? session.agentId : options.agentId;
+		if (agentId) claims.agent_id = agentId;
+		else delete claims.agent_id;
+
+		if (options.ath !== undefined) {
+			if (options.ath !== null) claims.ath = options.ath;
+			else delete claims.ath;
+		} else if (options.accessToken) {
+			claims.ath = await sha256b64url(options.accessToken);
+		}
+
+		const typ = options.typ ?? SESSION_TYP;
+		const dlg = options.omitDlg ? undefined : session.delegation;
+		const kid = options.wrongKid ? (await this.newDpopKey()).jkt : session.jkt;
+
+		if (options.alg === "none") {
+			const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+			return `${encode({ alg: "none", typ, kid, ...(dlg ? { poppy_dlg: dlg } : {}) })}.${encode(claims)}.`;
+		}
+
+		const key = options.signWithJwks ? this.keys.signing.privateKey : session.delegated.privateKey;
+		return new SignJWT(claims)
+			.setProtectedHeader({ alg: "ES256", typ, kid, ...(dlg ? { poppy_dlg: dlg } : {}), ...options.header })
+			.sign(key);
 	}
 
 	async dpopProof(method: string, url: string, options: ProofOptions = {}): Promise<string> {
@@ -642,15 +974,16 @@ export class TestAgent {
 		if (options.accessToken) claims.ath = await sha256b64url(options.accessToken);
 		if (options.ath) claims.ath = options.ath;
 		if (options.nonce !== undefined) claims.nonce = options.nonce;
-		const session = options.session ?? (options.accessToken ? this.tokenKeys.get(options.accessToken) : undefined) ?? this.latestKey ?? (await this.newSessionKey());
+		const meta = options.accessToken ? this.tokenMeta.get(options.accessToken) : undefined;
+		const dpop = options.dpop ?? (meta ? await this.dpopKeyFor(meta.userId) : this.latestSession ? await this.dpopKeyFor(this.latestSession.userId) : await this.newDpopKey());
 		const { stranger } = this.keys;
-		const keys = options.otherKey ? stranger : session.keys;
+		const keys = options.otherKey ? stranger : dpop.keys;
 		const jwk = options.leakPrivateKey ? keys.privateJwk : keys.publicJwk;
-		const key = options.wrongSigningKey ? (options.otherKey ? session.keys : stranger).privateKey : keys.privateKey;
+		const key = options.wrongSigningKey ? (options.otherKey ? dpop.keys : stranger).privateKey : keys.privateKey;
 		return new SignJWT(claims).setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk }).sign(key);
 	}
 
-	/** Signs a client assertion (subject = clientId) or a session assertion (subject = user id). Both are addressed to the issuer. */
+	/** Signs a client assertion (subject = clientId) addressed to the issuer. */
 	async signAssertion(subject: string, audience: string, options: AssertionOptions = {}): Promise<string> {
 		const now = Math.floor(Date.now() / 1000) + (options.iatOffset ?? 0);
 		const claims = { iss: options.issuer ?? this.clientId, sub: subject, aud: audience, iat: now, exp: now + (options.lifetime ?? 60), jti: options.jti ?? randomJti(), ...options.claims };
@@ -658,6 +991,26 @@ export class TestAgent {
 		if (options.alg === "none") {
 			const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
 			return `${encode({ alg: "none", typ })}.${encode(claims)}.`;
+		}
+		return new SignJWT(claims).setProtectedHeader({ alg: "ES256", kid: "k1", typ, ...options.header }).sign(this.keys.signing.privateKey);
+	}
+
+	/** Signs a poppy-delegation+jwt for a delegated public key (spec 5.2). */
+	async signDelegation(delegatedPublic: JWK, options: AssertionOptions = {}): Promise<string> {
+		const now = Math.floor(Date.now() / 1000) + (options.iatOffset ?? 0);
+		const lifetime = options.lifetime ?? DELEGATION_LIFETIME;
+		const claims = {
+			iss: options.issuer ?? this.clientId,
+			iat: now,
+			exp: now + lifetime,
+			jti: options.jti ?? randomJti(),
+			cnf: { jwk: publicOnly(delegatedPublic) },
+			...options.claims,
+		};
+		const typ = options.typ ?? DELEGATION_TYP;
+		if (options.alg === "none") {
+			const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+			return `${encode({ alg: "none", typ, kid: "k1" })}.${encode(claims)}.`;
 		}
 		return new SignJWT(claims).setProtectedHeader({ alg: "ES256", kid: "k1", typ, ...options.header }).sign(this.keys.signing.privateKey);
 	}
@@ -679,21 +1032,26 @@ export class TestAgent {
 		return this.fetcher(url, { method: "POST", headers: { ...FORM, ...headers }, body: form.toString() });
 	}
 
-	private operationUrl(operationId: string, action = ""): string {
-		return `${this.endpoint("operations")}/${encodeURIComponent(operationId)}${action}`;
+	private rememberToken(token: TokenResponse): void {
+		this.tokenMeta.set(token.access_token, { session: token.session, tokenType: token.token_type, userId: token.session.userId });
+		this.latestSession = token.session;
 	}
 
-	private async operationReply(response: Response): Promise<OperationReply> {
-		return { operation: await this.expectJson(response), retryAfter: response.headers.get("retry-after") };
+	private defaultExtensions(): Record<string, string> {
+		return { ...this.options.extensions };
 	}
 
-	private async conversationPost(path: string, token: string, body: unknown, options: { wait?: number; cursor?: string } = {}): Promise<ConversationReply> {
-		const response = await this.dpopJson(`${this.endpoint("conversations")}${path}${query(options)}`, token, body);
+	private async conversationPost(
+		path: string,
+		session: Session,
+		body: unknown,
+		options: SessionRequestOptions & { wait?: number; cursor?: string } = {},
+	): Promise<ConversationReply> {
+		const response = await this.sessionJson(`${this.endpoint("conversations")}${path}${query(options)}`, session, body, options);
 		return { httpStatus: response.status, ...(await this.expectJson<Omit<ConversationReply, "httpStatus">>(response)) };
 	}
 
 	private async getJson<T>(url: string): Promise<T> {
-		// Metadata requests never carry credentials.
 		return this.expectJson(await this.fetcher(url, { headers: { accept: "application/json" } }));
 	}
 
@@ -709,6 +1067,48 @@ export class TestAgent {
 	}
 }
 
+/** JSON → string[]. Rejects a bare string so `.includes` cannot become a substring check. */
+function stringList(value: unknown, field: string): string[] {
+	if (value === undefined) return [];
+	if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string")) {
+		throw new Error(`${field} must be a list of strings`);
+	}
+	return value as string[];
+}
+
+/** Authorization server metadata at the wire boundary: grant and resource lists are string[]. */
+function parseAuthorizationServerMetadata(raw: Record<string, unknown>): AuthorizationServerMetadata {
+	if (typeof raw.issuer !== "string") throw new Error("issuer metadata has no issuer");
+	if (typeof raw.token_endpoint !== "string") throw new Error("issuer metadata has no token_endpoint");
+	if (typeof raw.revocation_endpoint !== "string") throw new Error("issuer metadata has no revocation_endpoint");
+	return {
+		...raw,
+		issuer: raw.issuer,
+		token_endpoint: raw.token_endpoint,
+		revocation_endpoint: raw.revocation_endpoint,
+		grant_types_supported: stringList(raw.grant_types_supported, "grant_types_supported"),
+		protected_resources: stringList(raw.protected_resources, "protected_resources"),
+		scopes_supported: raw.scopes_supported === undefined ? undefined : stringList(raw.scopes_supported, "scopes_supported"),
+		authorization_endpoint: typeof raw.authorization_endpoint === "string" ? raw.authorization_endpoint : undefined,
+		device_authorization_endpoint: typeof raw.device_authorization_endpoint === "string" ? raw.device_authorization_endpoint : undefined,
+	};
+}
+
+function pickExtension(list: ExtensionVersion[] | undefined, version?: string): ExtensionVersion | undefined {
+	if (!Array.isArray(list) || list.length === 0) return undefined;
+	if (version) return list.find((e) => e.version === version) ?? undefined;
+	return list[0];
+}
+
+function formatExtensions(extensions: Record<string, string>): string {
+	return Object.entries(extensions)
+		.map(([name, version]) => `"${name}";v="${version}"`)
+		.join(", ");
+}
+
+function sfString(value: string): string {
+	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
 
 function query(options: { wait?: number; cursor?: string }): string {
 	const params = new URLSearchParams();
@@ -726,3 +1126,5 @@ async function sha256b64url(text: string): Promise<string> {
 	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
 	return Buffer.from(digest).toString("base64url");
 }
+
+export { BROWSER_SIGN_IN_SCOPE };

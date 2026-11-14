@@ -16,5 +16,6 @@ export declare const PATHS: {
 	readonly conversations: "/poppy/conversations";
 	readonly feedback: "/poppy/feedback";
 	readonly excludedTasks: "/poppy/excluded-tasks.json";
+	readonly tasks: "/poppy/tasks";
 };
 export declare const ROUTES: readonly string[];

@@ -4,12 +4,11 @@ import { authorizeEndpoint, deviceVerificationEndpoint } from "./consent.ts";
 import { Conversations, conversationsEndpoint, type ConversationsConfig } from "./conversations.ts";
 import { authorizationServerMetadata, mcpResourceMetadata, poppyDocument } from "./discovery.ts";
 import { PoppyError } from "./errors.ts";
-import { guard, guardedFrom } from "./guard.ts";
+import { checkVersionIfSession, guard } from "./guard.ts";
 import { mcpEndpoint } from "./mcp.ts";
-import { mediatedEndpoint } from "./mediated.ts";
 import { deviceAuthorizationEndpoint, revokeEndpoint, tokenEndpoint } from "./oauth.ts";
 import { openApiDocument, toolCallEndpoint } from "./openapi.ts";
-import { agentSupportsOperations, Operations, operationJson, operationsEndpoint, type OperationResult, type OperationView } from "./operations.ts";
+import { Operations, operationJson, operationsEndpoint, operationsRefEndpoint, type OperationResult, type OperationView } from "./operations.ts";
 import { PATHS, ROUTES } from "./paths.js";
 import { withUsage } from "./ratelimit.ts";
 import { key, revokeAccountToken, type Connection } from "./records.ts";
@@ -17,9 +16,9 @@ import { canSafeFetch, safeFetch } from "./safe-fetch.ts";
 import { memoryStore } from "./store.ts";
 import { Sealer } from "./tokens.ts";
 import { Tools } from "./tools.ts";
-import { checkExcludedTasks, excludedTasksDocument, feedbackEndpoint } from "./tasks.ts";
-import { type OperationTool, type PoppyseedConfig, type ResolvedConfig, type RunTool, type SessionContext, type Terms, type ToolDefinition } from "./types.ts";
-import { browserSessionEndpoint, browserSessionPage, readBrowserSession } from "./web.ts";
+import { checkExcludedTasks, feedbackEndpoint, tasksEndpoint } from "./tasks.ts";
+import { PROTOCOL_VERSION, type OperationTool, type PoppyseedConfig, type ResolvedConfig, type RunTool, type SessionContext, type Terms, type ToolDefinition } from "./types.ts";
+import { browserAuthorizeEndpoint, browserSessionPage, browserSessionSubmit, readBrowserSession } from "./web.ts";
 import { json } from "./util.ts";
 
 /** Your staff's inbox for conversations handed off by Personal Agents (spec 7.9). */
@@ -39,29 +38,32 @@ export interface Poppyseed<C extends PoppyseedConfig = PoppyseedConfig> {
 	urls: ResolvedConfig["urls"];
 	/** The tools you configured, as agents see them. */
 	tools: Tools["list"];
-	/** Wraps one of your own route handlers so it accepts only DPoP Session Tokens, optionally with a scope, and hands it the caller. */
+	/** Wraps one of your own route handlers so it requires Poppy-Session (and optional scope), and hands it the caller. */
 	protect(handler: (request: Request, ctx: SessionContext) => Promise<Response> | Response, options?: { scope?: string }): (request: Request) => Promise<Response>;
 	/** The Personal Agents connected to one of your accounts, for your account settings page. */
 	connections: {
 		list(accountId: string): Promise<Connection[]>;
-		/** Disconnects a Personal Agent: revokes its Account Tokens and signs its Sessions out (spec 4.9). */
+		/** Disconnects a Personal Agent: revokes its refresh tokens (spec 5.5). */
 		disconnect(accountId: string, clientId: string): Promise<void>;
 	};
-	/** Ends a Session; its tokens stop working on the next request. */
+	/** Ends a Session; later requests with that sid get session_ended. */
 	endSession(sessionId: string): Promise<void>;
 	/**
-	 * The Session a Personal Agent's browser carries on your website (spec 5),
+	 * The Session a Personal Agent's browser carries on your website (spec 6),
 	 * read fresh on every call, or null. Check it before your own session
 	 * cookie: while the browser carries it, the request is that Session's.
 	 */
 	browserSession(request: Request): Promise<SessionContext | null>;
-	/** Operations your tools proposed (operations extension). */
+	/** Operations your tools proposed (operations extension v3). */
 	operations: {
 		get(operationId: string): Promise<OperationView | undefined>;
-		/** Confirms an operation from your website, for the browser's Session. It is the same operation, so it can't run twice. */
-		confirm(operationId: string, session: SessionContext, revision: number): Promise<OperationView>;
-		/** Records the outcome of an operation still in progress, for when `perform` couldn't tell whether it took effect. Final operations never change. */
+		/** Records the outcome of an operation still in progress. Final operations never change. */
 		settle(operationId: string, state: "succeeded" | "failed" | "cancelled", result: OperationResult): Promise<void>;
+		/**
+		 * Website confirm: returns 403 with Poppy-Operation, or performs once when
+		 * `operationId` names an approved website operation.
+		 */
+		websiteAction(ctx: SessionContext, toolName: string, input: unknown, options?: { operationId?: string }): Promise<Response>;
 	};
 	/** Present when `conversations` is configured. */
 	conversations: C["conversations"] extends ConversationsConfig ? StaffInbox : undefined;
@@ -78,14 +80,13 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 	const clients = new ClientRegistry(config);
 	const byName = new Map(Object.entries(config.tools));
 	const operations = new Operations(config.store, byName);
-	const tools = new Tools(byName, operations, clients);
+	const tools = new Tools(byName, operations);
 	const conversations = config.conversations && new Conversations(config, config.conversations, tools);
-	/** Signs out every Session an Account Token reached. Conversations and operations that used the account stay, for a sign-in (spec 4.9). */
+	/** Revoking a refresh token signs out (spec 5.5). Sessions continue signed out. */
 	const signOut = async (hash: string) => {
 		await revokeAccountToken(config.store, hash, { endSessions: config.sessions?.endOnSignOut === true });
 	};
-	const dpop = (request: Request, publicUrl: string) => guard(request, publicUrl, config, sealer, "dpop");
-	const confirmWaitMs = config.operations?.confirmWait ?? 3000;
+	const authed = (request: Request, publicUrl: string, kind: "dpop" | "mcp" = "dpop") => guard(request, publicUrl, config, clients, sealer, kind);
 
 	/** One handler per method for every path in ROUTES; a path absent here is a bug the table check below catches. */
 	const table: Record<string, Partial<Record<"GET" | "POST", Handler>>> = {
@@ -97,47 +98,64 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 		[PATHS.authorize]: { GET: (request) => authorizeEndpoint(request, config, clients, sealer), POST: (request) => authorizeEndpoint(request, config, clients, sealer) },
 		[PATHS.deviceAuthorization]: { POST: (request) => deviceAuthorizationEndpoint(request, config, clients) },
 		[PATHS.deviceVerification]: { GET: (request) => deviceVerificationEndpoint(request, config, clients, sealer), POST: (request) => deviceVerificationEndpoint(request, config, clients, sealer) },
-		[PATHS.mediated]: { POST: async (request, { publicUrl }) => mediatedEndpoint(request, config, clients, sealer, await dpop(request, publicUrl), undefined) },
-		[`${PATHS.mediated}/:id`]: { POST: async (request, { publicUrl, params }) => mediatedEndpoint(request, config, clients, sealer, await dpop(request, publicUrl), params.id) },
+		// Mediated Sign-In is an OAuth grant at the token endpoint in 0.4; these paths 404.
+		[PATHS.mediated]: { POST: async () => Promise.reject(notFound()) },
+		[`${PATHS.mediated}/:id`]: { POST: async () => Promise.reject(notFound()) },
 		[PATHS.browserSession]: {
-			GET: async () => (config.web ? browserSessionPage(config, sealer) : Promise.reject(notFound())),
-			POST: async (request) => (config.web ? browserSessionEndpoint(request, config, sealer) : Promise.reject(notFound())),
+			GET: async () => (config.web && !config.web.disabled ? browserSessionPage(config, sealer) : Promise.reject(notFound())),
+			POST: async (request) => (config.web && !config.web.disabled ? browserSessionSubmit(request, config, sealer) : Promise.reject(notFound())),
 		},
-		[PATHS.mcp]: { POST: async (request, { publicUrl }) => mcpEndpoint(request, tools, config.organization.name, await guard(request, publicUrl, config, sealer, "mcp")) },
+		[`${PATHS.browserSession}/authorize`]: {
+			POST: async (request, { publicUrl }) => (config.web && !config.web.disabled ? browserAuthorizeEndpoint(request, publicUrl, config, clients, sealer) : Promise.reject(notFound())),
+		},
+		[PATHS.mcp]: { POST: async (request, { publicUrl }) => mcpEndpoint(request, tools, config.organization.name, await authed(request, publicUrl, "mcp")) },
 		[PATHS.feedback]: {
 			POST: async (request, { publicUrl }) => {
 				if (!config.feedback) throw notFound();
-				return feedbackEndpoint(request, config, config.feedback, await dpop(request, publicUrl));
+				return feedbackEndpoint(request, config, config.feedback, await authed(request, publicUrl));
 			},
 		},
-		[PATHS.excludedTasks]: { GET: async () => (config.excludedTasks ? excludedTasksDocument(config) : Promise.reject(notFound())) },
+		[PATHS.excludedTasks]: { GET: async () => Promise.reject(notFound()) },
+		[PATHS.tasks]: {
+			GET: async (request, { publicUrl }) => {
+				if (!config.excludedTasks && !config.feedback) throw notFound();
+				return tasksEndpoint(request, publicUrl, config, clients, sealer);
+			},
+		},
 		[PATHS.openapi]: { GET: async () => json(openApiDocument(config, tools), 200, cacheable) },
-		[`${PATHS.tools}/:name`]: { POST: async (request, { publicUrl, params }) => toolCallEndpoint(request, config.store, tools, await dpop(request, publicUrl), params.name!) },
-		[`${PATHS.operations}/:id`]: { GET: async (request, { publicUrl, params }) => operationsEndpoint(request, operations, await dpop(request, publicUrl), params.id!, "read", confirmWaitMs) },
-		[`${PATHS.operations}/:id/:action`]: {
-			POST: async (request, { publicUrl, params }) => {
-				if (params.action !== "confirm" && params.action !== "cancel") throw notFound();
-				return operationsEndpoint(request, operations, await dpop(request, publicUrl), params.id!, params.action, confirmWaitMs, config.waitUntil);
-			},
-		},
+		[`${PATHS.tools}/:name`]: { POST: async (request, { publicUrl, params }) => toolCallEndpoint(request, config.store, tools, await authed(request, publicUrl), params.name!) },
+		[PATHS.operations]: { POST: async (request, { publicUrl }) => operationsRefEndpoint(request, operations, await authed(request, publicUrl)) },
+		[`${PATHS.operations}/:id`]: { GET: async (request, { publicUrl, params }) => operationsEndpoint(request, operations, await authed(request, publicUrl), params.id!) },
 		[PATHS.conversations]: {
 			POST: async (request, { publicUrl }) => {
 				if (!conversations) throw notFound();
-				const auth = await dpop(request, publicUrl);
-				return conversationsEndpoint(request, conversations, auth, { action: "start", supportsOperations: await agentSupportsOperations(clients, auth.ctx.clientId) });
+				const auth = await authed(request, publicUrl);
+				return conversationsEndpoint(request, conversations, auth, {
+					action: "start",
+					declared: {
+						operations: auth.extensions.get("operations") === "3",
+						disclosures: auth.extensions.get("disclosures") === "1",
+						links: auth.extensions.get("links") === "1",
+					},
+				});
 			},
 		},
 		[`${PATHS.conversations}/:id/:action`]: Object.fromEntries(
 			(["GET", "POST"] as const).map((method) => [
 				method,
 				async (request: Request, { publicUrl, params }: { publicUrl: string; params: Record<string, string> }) => {
-					// Reads are GET; everything else is POST.
 					const action = params.action;
 					if (!conversations || (action !== "messages" && action !== "events" && action !== "handoff" && action !== "close") || (method === "GET") !== (action === "events")) throw notFound();
-					return conversationsEndpoint(request, conversations, await dpop(request, publicUrl), { action, id: params.id! });
+					return conversationsEndpoint(request, conversations, await authed(request, publicUrl), { action, id: params.id! });
 				},
 			]),
 		),
+		[`${PATHS.conversations}/:id/:action/:sub`]: {
+			POST: async (request, { publicUrl, params }) => {
+				if (!conversations || params.action !== "handoff" || params.sub !== "cancel") throw notFound();
+				return conversationsEndpoint(request, conversations, await authed(request, publicUrl), { action: "handoff_cancel", id: params.id! });
+			},
+		},
 	};
 	const routes = ROUTES.map((template) => {
 		const methods = table[template];
@@ -168,7 +186,11 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 				const handler = methods[request.method as "GET" | "POST"];
 				if (!handler) return new Response(null, { status: 405, headers: { allow: Object.keys(methods).join(", ") } });
 				const params = Object.fromEntries(names.map((name, i) => [name, match[i + 1]!]));
-				return respond(request, () => handler(request, { publicUrl: publicUrlOf(pathname), params }));
+				return respond(request, () => {
+					// Version check before handling when a Session header is present (spec 3.4).
+					checkVersionIfSession(request, config);
+					return handler(request, { publicUrl: publicUrlOf(pathname), params });
+				});
 			}
 			return undefined;
 		},
@@ -176,7 +198,7 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 		tools: tools.list,
 		protect: (handler, options = {}) => (request) =>
 			respond(request, async () => {
-				const auth = await dpop(request, publicUrlOf(new URL(request.url).pathname));
+				const auth = await authed(request, publicUrlOf(new URL(request.url).pathname));
 				auth.require(options.scope ?? null);
 				return handler(request, auth.ctx);
 			}),
@@ -191,21 +213,24 @@ export function definePoppyseed<C extends PoppyseedConfig>(input: C): Poppyseed<
 				}
 			},
 		},
-		endSession: (sessionId) => config.store.delete(key.session(sessionId)),
+		endSession: async (sessionId) => {
+			const session = await config.store.get<{ clientId: string; userId: string }>(key.session(sessionId));
+			await config.store.delete(key.session(sessionId));
+			if (session) {
+				await config.store.delete(key.session(`${session.clientId}:${sessionId}:${session.userId}`));
+				await config.store.set(`session-ended:${session.clientId}:${sessionId}:${session.userId}`, true, { expiresAt: Date.now() + config.ttl.session * 1000 });
+			}
+		},
 		browserSession: (request) => readBrowserSession(request, config, sealer),
 		operations: {
 			async get(operationId) {
 				const op = await operations.read(operationId);
 				return op && operationJson(op);
 			},
-			async confirm(operationId, session, revision) {
-				const { op, settled } = await operations.confirm(operationId, guardedFrom(session), { revision, approved_by: "user" });
-				config.waitUntil?.(settled);
-				return operationJson(op);
-			},
 			async settle(operationId, state, result) {
 				await operations.settle(operationId, state, result);
 			},
+			websiteAction: (ctx, toolName, input, options) => operations.websiteAction(ctx, toolName, input, options),
 		},
 		conversations: (conversations && {
 			queue: () => conversations.queue(),
@@ -228,7 +253,9 @@ function resolveConfig(input: PoppyseedConfig): ResolvedConfig {
 	const baseUrl = url.origin;
 	const scopes = input.scopes ?? {};
 	for (const name of Object.keys(scopes)) {
-		if (name.startsWith("poppy:")) throw new Error(`poppyseed: scope ${name} must not start with poppy:, which the protocol reserves`);
+		if (name.startsWith("poppy:") && name !== "poppy:browser-sign-in") {
+			throw new Error(`poppyseed: scope ${name} must not start with poppy:, which the protocol reserves (except poppy:browser-sign-in)`);
+		}
 	}
 	const known = new Set<string>(Object.keys(scopes));
 	for (const [name, tool] of Object.entries(input.tools ?? {})) {
@@ -261,6 +288,7 @@ function resolveConfig(input: PoppyseedConfig): ResolvedConfig {
 		apiDescription: input.apiDescription ?? `${input.organization.name} tools for personal agents`,
 		store: input.store ?? memoryStore(),
 		tools: input.tools ?? {},
+		protocolVersion: PROTOCOL_VERSION,
 		// On Node, metadata fetches check the address they connect to; in development, loopback agents are allowed.
 		fetch: input.fetch ?? (canSafeFetch && !input.dev?.allowInsecureClients ? safeFetch : globalThis.fetch.bind(globalThis)),
 		ttl: {

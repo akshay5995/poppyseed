@@ -18,9 +18,10 @@ describe("metadata caching", () => {
 			const companyFetch = (async (input: RequestInfo | URL, init?: RequestInit) => (await company.handle(new Request(input, init)))!) as typeof fetch;
 			const agent = await host.createAgent(companyFetch);
 			await agent.discover("https://t.test");
-			await agent.startSession();
+			// Client metadata is loaded when verifying a client assertion at the token endpoint (not on local startSession).
+			await agent.tokenRequest({ grant_type: "refresh_token", refresh_token: "rt_probe" }).catch(() => undefined);
 			vi.setSystemTime(Date.now() + elapsedMs);
-			await agent.startSession();
+			await agent.tokenRequest({ grant_type: "refresh_token", refresh_token: "rt_probe" }).catch(() => undefined);
 			return host.requests.length;
 		} finally {
 			vi.useRealTimers();

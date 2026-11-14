@@ -125,7 +125,11 @@ function describe(result: ToolResult): string {
 		case "output":
 			return JSON.stringify(result.output);
 		case "operation":
-			return `Proposed, not done yet. The customer's agent will confirm it. Summary: ${result.operation.summary}`;
+			return `Proposed, not done yet. The customer's agent will approve it. Summary: ${result.operation.summary ?? JSON.stringify(result.operation.terms)}`;
+		case "declined":
+			return result.reason ?? "The approval was declined. Nothing was done.";
+		case "busy":
+			return "The approved action is still running.";
 		case "authorization":
 			return `The customer needs to sign in, or grant more access (${result.scope}). The request was sent.`;
 		case "error":

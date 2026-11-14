@@ -1,6 +1,6 @@
 # Poppyseed
 
-Let personal AI agents use your Next.js site. Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org/) (Poppy for short, draft 0.3): agents find your site, sign people in with their consent, call your tools, and buy only what people approve.
+Let personal AI agents use your Next.js site. Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org/docs/0.4/spec) (Poppy for short, version 0.4): agents find your site, sign people in with their consent, call your tools, and buy only what people approve.
 
 **[withpoppyseed.dev](https://withpoppyseed.dev)**. Using a coding agent? Copy the prompt from the site and paste it in.
 
@@ -46,7 +46,7 @@ import { withPoppyseed } from "poppyseed/next/config";
 export default withPoppyseed(nextConfig); // wraps your existing config
 ```
 
-Your site now serves discovery at `/.well-known/poppy.json`, agent sign-in with OAuth and DPoP, and your tools over MCP and OpenAPI. Try it as an agent: `npx poppyseed agent http://localhost:3000`. The [Quickstart](docs/quickstart.md) walks through it.
+Your site now serves discovery at `/.well-known/poppy.json`, agent sign-in with OAuth, Sessions over `Poppy-Session`, and your tools over MCP and OpenAPI. Try it as an agent: `npx poppyseed agent http://localhost:3000`. The [Quickstart](docs/quickstart.md) walks through it.
 
 ## Add more when you need it
 
@@ -108,8 +108,8 @@ pnpm mutants      # break each rule on purpose; its check must fail
 pnpm quickstart   # run docs/quickstart.md as written in a fresh Next.js app
 ```
 
-Versions follow the spec: poppyseed `X.Y.*` implements Poppy `X.Y`, and the patch number is ours. To release, set the version in `packages/core/package.json`, commit, and push a tag such as `v0.3.0`. The `release` workflow reruns every gate and stages it on npm through trusted publishing, with no token; release it with `npm stage list poppyseed`, then `npm stage approve <stage-id>`. Project rules are in [AGENTS.md](AGENTS.md).
+Versions follow the spec: poppyseed `X.Y.*` implements Poppy `X.Y`, and the patch number is ours. To release, set the version in `packages/core/package.json`, commit, and push a tag such as `v0.4.0`. The `release` workflow reruns every gate and stages it on npm through trusted publishing, with no token; release it with `npm stage list poppyseed`, then `npm stage approve <stage-id>`. Project rules are in [AGENTS.md](AGENTS.md).
 
 ## License
 
-MIT. The spec text in `spec/source/` is © its authors under Apache 2.0. The protocol is a draft, so expect changes. Poppyseed is an independent implementation, not affiliated with the protocol's authors. The names Personal Agent Protocol and Poppy are theirs.
+MIT. The spec text in `spec/source/` is © its authors under Apache 2.0. Poppy 0.4 is the 1.0 release candidate; expect changes before 1.0. Poppyseed is an independent implementation, not affiliated with the protocol's authors. The names Personal Agent Protocol and Poppy are theirs.

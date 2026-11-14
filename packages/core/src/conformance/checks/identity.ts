@@ -1,130 +1,164 @@
-import { check, refusals } from "../check.ts";
+import { check } from "../check.ts";
 import type { Harness } from "../harness.ts";
+import type { TestAgent, TokenRequestOptions } from "../../agent/index.ts";
 
 const INVALID_CLIENT = { status: 401, error: "invalid_client" } as const;
-const INVALID_GRANT = { status: 400, error: "invalid_grant" } as const;
-const IMPOSTOR = "https://impostor.example/client.json";
 const YEAR_AHEAD = 365 * 86400;
+const IMPOSTOR = "https://impostor.example/client.json";
+
+/** A token request that only needs client authentication to fail or pass the client checks. */
+function bentToken(agent: TestAgent, options: TokenRequestOptions = {}) {
+	return agent.token({ grant_type: "refresh_token", refresh_token: "not-a-real-refresh-token" }, options);
+}
 
 export const identityChecks = [
 	check({
+		id: "identity/client-assertion",
+		title: "Client assertion aud must be the issuer; ES256 is accepted",
+		covers: ["identity.client-assertion-company", "identity.companies-reject-client", "identity.companies-accept-client"],
+		leg: 1,
+		async run(t: Harness) {
+			const { agent, token } = await t.session({ signIn: true });
+			await t.refused(
+				"client assertion addressed to the token endpoint",
+				bentToken(agent, { clientAssertion: { audience: agent.company.metadata.token_endpoint } }),
+				INVALID_CLIENT,
+			);
+
+			// ES256 (the agent's default) is accepted: a real refresh after sign-in succeeds.
+			const refreshed = await agent.refresh(token.refresh_token);
+			t.ok(refreshed.access_token, "an ES256 client assertion is accepted on refresh");
+		},
+	}),
+
+	check({
 		id: "identity/metadata-fetch-bounded",
 		title: "A stream of assertions signed with an unknown key doesn't make the company fetch the agent's keys each time",
-		covers: ["guide.refetch-on-unknown-kid"],
+		covers: ["guide.metadata-no-credentials", "identity.personal-agent-authenticates"],
 		leg: 1,
 		async run(t: Harness) {
 			const agent = await t.agent();
-			await agent.startSession();
+			await bentToken(agent).catch(() => {});
 			const fetches = () => t.target.agents.requests.filter((r) => r.url === agent.clientId || r.url === agent.jwksUri).length;
 			const before = fetches();
 			for (let i = 0; i < 10; i++) {
-				await t.refused(`assertion ${i + 1} with an unknown kid`, agent.startSession({ clientAssertion: { header: { kid: `rotated-${i}` } } }), INVALID_CLIENT);
+				await t.refused(`assertion ${i + 1} with an unknown kid`, bentToken(agent, { clientAssertion: { header: { kid: `rotated-${i}` } } }), INVALID_CLIENT);
 			}
 			t.ok(fetches() - before <= 2, `10 assertions with unknown keys made ${fetches() - before} metadata fetches; refetches must be rate limited`);
 
 			// An agent whose metadata can't be fetched is remembered as such, too.
 			const missing = await t.agent({ clientId: `${t.target.agents.origin}/missing-${crypto.randomUUID()}/client.json` });
-			for (let i = 0; i < 5; i++) await missing.startSession().catch(() => {});
+			for (let i = 0; i < 5; i++) await bentToken(missing).catch(() => {});
 			t.ok(t.target.agents.requests.filter((r) => r.url === missing.clientId).length <= 1, "an unfetchable client_id is fetched at most once");
 		},
 	}),
 
-	refusals(
-		{ id: "identity/client-auth-required", title: "Token requests without a client assertion are refused", covers: ["identity.private-key-jwt"], leg: 1, expect: INVALID_CLIENT },
-		[
-			{ label: "no client_assertion", request: { omit: ["client_assertion", "client_assertion_type"] } },
-			{ label: "no client_id", request: { omit: ["client_id"] } },
-		],
-	),
-
-	refusals(
-		{
-			id: "identity/client-assertion-claims",
-			title: "Client assertions must name the client as iss and sub, and the issuer as aud, never an endpoint",
-			covers: ["identity.private-key-jwt", "identity.client-assertion-aud"],
-			leg: 1,
-			expect: INVALID_CLIENT,
+	check({
+		id: "identity/client-auth-required",
+		title: "Token requests without a client assertion are refused",
+		covers: ["identity.personal-agent-authenticates", "identity.client-assertions-follow"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			await t.refused("no client_assertion", bentToken(agent, { omit: ["client_assertion", "client_assertion_type"] }), INVALID_CLIENT);
+			await t.refused("no client_id", bentToken(agent, { omit: ["client_id"] }), INVALID_CLIENT);
 		},
-		[
-			{ label: "client assertion for another audience", request: (agent) => ({ clientAssertion: { audience: `${agent.company.origin}/elsewhere` } }) },
-			{ label: "client assertion addressed to the token endpoint", request: (agent) => ({ clientAssertion: { audience: agent.company.metadata.token_endpoint } }) },
-			{ label: "client assertion whose aud is a list holding the issuer", request: (agent) => ({ clientAssertion: { claims: { aud: [agent.company.metadata.issuer] } } }) },
-			{ label: "client assertion with sub other than client_id", request: { clientAssertion: { subject: "someone-else" } } },
-			{ label: "client assertion with another issuer", request: { clientAssertion: { issuer: IMPOSTOR } } },
-		],
-	),
+	}),
 
 	check({
-		id: "identity/client-assertion-replay",
-		title: "Client and session assertions are accepted once, and the session assertion must come from the client",
-		covers: ["identity.private-key-jwt", "sessions.verify-assertions", "identity.client-assertion-replay"],
+		id: "identity/client-assertion-claims",
+		title: "Client assertions must name the client as iss and sub, and the issuer as aud, never an endpoint",
+		covers: ["identity.client-assertion-company", "identity.companies-reject-client", "identity.client-assertions-follow"],
 		leg: 1,
 		async run(t: Harness) {
 			const agent = await t.agent();
 			const issuer = agent.company.metadata.issuer;
-			const clientAssertion = await agent.signAssertion(agent.clientId, issuer);
-			await agent.startSession({ clientAssertion });
-			await t.refused("replayed client assertion", agent.startSession({ clientAssertion }), INVALID_CLIENT);
-
-			const assertion = await agent.signAssertion(agent.userId, issuer);
-			await agent.startSession({ assertion });
-			await t.refused("replayed session assertion", agent.startSession({ assertion }), INVALID_GRANT);
-			await t.refused("session assertion whose iss is another client", agent.startSession({ assertion: { subject: "usr_x", issuer: IMPOSTOR } }), INVALID_GRANT);
+			for (const [label, options] of [
+				["client assertion for another audience", { clientAssertion: { audience: `${agent.company.origin}/elsewhere` } }],
+				["client assertion addressed to the token endpoint", { clientAssertion: { audience: agent.company.metadata.token_endpoint } }],
+				["client assertion whose aud is a list holding the issuer", { clientAssertion: { claims: { aud: [issuer] } } }],
+				["client assertion with sub other than client_id", { clientAssertion: { subject: "someone-else" } }],
+				["client assertion with another issuer", { clientAssertion: { issuer: IMPOSTOR } }],
+			] as const) {
+				await t.refused(label, bentToken(agent, options), INVALID_CLIENT);
+			}
 		},
 	}),
 
-	refusals(
-		{
-			id: "identity/assertion-lifetime",
-			title: "Assertions claiming a long lifetime, or carrying their own key, are refused",
-			covers: ["guide.assertion-time", "guide.assertion-keys"],
-			leg: 1,
-			expect: INVALID_CLIENT,
+	check({
+		id: "identity/client-assertion-replay",
+		title: "Client assertions are accepted once",
+		covers: ["identity.company-reject-reused", "identity.include-unique-unguessable", "identity.client-assertions-follow"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			const clientAssertion = await agent.signAssertion(agent.clientId, agent.company.metadata.issuer);
+			await bentToken(agent, { clientAssertion }).catch(() => {});
+			await t.refused("replayed client assertion", bentToken(agent, { clientAssertion }), INVALID_CLIENT);
 		},
-		[
-			{ label: "client assertion living 600 seconds", request: { clientAssertion: { lifetime: 600 } } },
-			{ label: "client assertion with an embedded jwk", request: (agent) => ({ clientAssertion: { header: { jwk: agent.signingPublicJwk } } }) },
-		],
-	),
+	}),
 
-	refusals({ id: "identity/assertion-fresh", title: "Assertions dated in the future are refused", covers: ["guide.assertion-time"], leg: 1, expect: INVALID_CLIENT }, [
-		{ label: "client assertion dated a year ahead", request: { clientAssertion: { iatOffset: YEAR_AHEAD } } },
-		{ label: "session assertion dated a year ahead", request: { assertion: { iatOffset: YEAR_AHEAD } }, expect: INVALID_GRANT },
-	]),
-
-	refusals(
-		{ id: "identity/client-id-must-match", title: "Client metadata whose client_id differs from its URL is refused", covers: ["identity.client-id-matches"], leg: 1, expect: INVALID_CLIENT },
-		[{ label: "tampered client_id", agent: { tamper: (meta) => ({ ...meta, client_id: IMPOSTOR }) } }],
-	),
-
-	refusals(
-		{
-			id: "identity/keys-same-domain",
-			title: "Client metadata pointing jwks_uri or redirect_uris to another domain is refused",
-			covers: ["identity.same-domain"],
-			leg: 1,
-			expect: INVALID_CLIENT,
+	check({
+		id: "identity/assertion-lifetime",
+		title: "Assertions claiming a long lifetime, or carrying their own key, are refused",
+		covers: ["identity.personal-agent-make", "identity.client-assertions-follow"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			await t.refused("client assertion living 600 seconds", bentToken(agent, { clientAssertion: { lifetime: 600 } }), INVALID_CLIENT);
+			await t.refused("client assertion with an embedded jwk", bentToken(agent, { clientAssertion: { header: { jwk: agent.signingPublicJwk } } }), INVALID_CLIENT);
 		},
-		[
-			{ label: "jwks_uri on another domain", agent: { tamper: (meta) => ({ ...meta, jwks_uri: "https://elsewhere.example/jwks.json" }) } },
-			{ label: "redirect_uri on another domain", agent: { tamper: (meta) => ({ ...meta, redirect_uris: ["https://elsewhere.example/cb"] }) } },
-		],
-	),
+	}),
+
+	check({
+		id: "identity/assertion-fresh",
+		title: "Assertions dated in the future are refused",
+		covers: ["identity.client-assertions-follow", "identity.personal-agent-make"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			await t.refused("client assertion dated a year ahead", bentToken(agent, { clientAssertion: { iatOffset: YEAR_AHEAD } }), INVALID_CLIENT);
+		},
+	}),
+
+	check({
+		id: "identity/client-id-must-match",
+		title: "Client metadata whose client_id differs from its URL is refused",
+		covers: ["identity.client-equal-document"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent({ tamper: (meta) => ({ ...meta, client_id: IMPOSTOR }) });
+			await t.refused("tampered client_id", bentToken(agent), INVALID_CLIENT);
+		},
+	}),
+
+	check({
+		id: "identity/keys-same-domain",
+		title: "Client metadata pointing jwks_uri or redirect_uris to another domain is refused",
+		covers: ["identity.jwks-https-same", "identity.entry-https-same"],
+		leg: 1,
+		async run(t: Harness) {
+			const jwks = await t.agent({ tamper: (meta) => ({ ...meta, jwks_uri: "https://elsewhere.example/jwks.json" }) });
+			await t.refused("jwks_uri on another domain", bentToken(jwks), INVALID_CLIENT);
+			const redirect = await t.agent({ tamper: (meta) => ({ ...meta, redirect_uris: ["https://elsewhere.example/cb"] }) });
+			await t.refused("redirect_uri on another domain", bentToken(redirect), INVALID_CLIENT);
+		},
+	}),
 
 	check({
 		id: "identity/loopback-redirect",
 		title: "A loopback redirect URI is accepted, and matches on any port, while an http URL on the agent's domain is not",
-		covers: ["identity.loopback-redirect", "identity.same-domain", "direct.redirect-exact"],
+		covers: ["identity.entry-https-same", "direct.redirect-exactly-match"],
 		leg: 2,
 		async run(t: Harness) {
 			const loopback = "http://127.0.0.1/callback";
 			const tamper = (meta: Record<string, unknown>) => ({ ...meta, redirect_uris: [new URL("callback", String(meta.client_id)).toString(), loopback] });
-			const { agent, token } = await t.session({ agent: { tamper } });
+			const { agent, session } = await t.session({ agent: { tamper } });
 			// RFC 8252 §7.3: the app listens on whatever port it got, so the port is the one part that may differ.
 			const onPort = "http://127.0.0.1:51004/callback";
-			const signedIn = await t.signInDirect(agent, token.session, { redirectUri: onPort });
+			const signedIn = await t.signInDirect(agent, session, { redirectUri: onPort });
 			t.ok(signedIn.refresh_token, `Direct Sign-In returns to ${onPort} and its code works`);
-			const elsewhere = await agent.authorizationRequest(t.offered("direct").join(" "), token.session, { redirectUri: "http://127.0.0.1:51004/elsewhere" });
+			const elsewhere = await agent.authorizationRequest(t.offered("direct").join(" "), session, { redirectUri: "http://127.0.0.1:51004/elsewhere" });
 			const response = await (await t.browser("alice")).request(elsewhere.url);
 			t.ok(!(response.headers.get("location") ?? "").startsWith("http://127.0.0.1"), `no redirect to a loopback path that isn't registered, got HTTP ${response.status}`);
 
@@ -135,33 +169,57 @@ export const identityChecks = [
 			}
 			const insecure = agent.redirectUri.replace(/^https:/, "http:");
 			const other = await t.agent({ tamper: (meta) => ({ ...meta, redirect_uris: [insecure] }) });
-			await t.refused(`a redirect_uri ${insecure}`, other.startSession(), INVALID_CLIENT);
+			await t.refused(`a redirect_uri ${insecure}`, bentToken(other), INVALID_CLIENT);
 		},
 	}),
 
-	refusals({ id: "identity/client-id-is-url", title: "A client_id that is not a URL is refused", covers: ["identity.client-id-url"], leg: 1, expect: INVALID_CLIENT }, [
-		{ label: "client_id 'my-agent'", agent: { clientId: "my-agent" } },
-	]),
-
-	refusals(
-		{ id: "identity/private-agent-urls", title: "Agent metadata on loopback or private addresses is refused", covers: ["guide.private-addresses", "discovery.private-addresses"], leg: 1, expect: INVALID_CLIENT },
-		(t) => {
-			if (!t.target.strictAgentUrls) t.skip("the target accepts loopback agents (strictAgentUrls is off)");
-			return ["127.0.0.1", "10.0.0.8", "localhost", "localhost.", "[::ffff:169.254.169.254]", "[::ffff:127.0.0.1]", "[64:ff9b::10.0.0.8]"].map((host) => {
-				const clientId = new URL(`https://${host}/client.json`).toString();
-				return { label: `client_id ${clientId}`, agent: { clientId, serve: true } };
-			});
+	check({
+		id: "identity/client-id-is-url",
+		title: "A client_id that is not a URL is refused",
+		covers: ["identity.personal-agent-client"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent({ clientId: "my-agent" });
+			await t.refused("client_id 'my-agent'", bentToken(agent), INVALID_CLIENT);
 		},
-	),
+	}),
 
-	refusals({ id: "guide/jwt-algorithms", title: "Unsigned (alg none) assertions are refused", covers: ["guide.algorithms"], leg: 1, expect: INVALID_CLIENT }, [
-		{ label: "client assertion with alg none", request: { clientAssertion: { alg: "none" } } },
-		{ label: "session assertion with alg none", request: { assertion: { alg: "none" } }, expect: INVALID_GRANT },
-	]),
+	check({
+		id: "identity/private-agent-urls",
+		title: "Agent metadata on loopback or private addresses is refused",
+		covers: ["guide.private-addresses", "discovery.private-addresses"],
+		leg: 1,
+		async run(t: Harness) {
+			if (!t.target.strictAgentUrls) t.skip("the target accepts loopback agents (strictAgentUrls is off)");
+			for (const host of ["127.0.0.1", "10.0.0.8", "localhost", "localhost.", "[::ffff:169.254.169.254]", "[::ffff:127.0.0.1]", "[64:ff9b::10.0.0.8]"]) {
+				const clientId = new URL(`https://${host}/client.json`).toString();
+				const agent = await t.agent({ clientId, serve: true });
+				await t.refused(`client_id ${clientId}`, bentToken(agent), INVALID_CLIENT);
+			}
+		},
+	}),
 
-	refusals({ id: "guide/jti-entropy", title: "Assertions with short jti values are refused", covers: ["guide.jti-entropy"], leg: 1, expect: INVALID_CLIENT }, [
-		{ label: "client assertion with jti 'abc'", request: { clientAssertion: { jti: "abc" } } },
-	]),
+	check({
+		id: "guide/jwt-algorithms",
+		title: "Unsigned (alg none) assertions are refused",
+		covers: ["identity.companies-accept-client", "identity.client-assertions-follow"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			await t.refused("client assertion with alg none", bentToken(agent, { clientAssertion: { alg: "none" } }), INVALID_CLIENT);
+		},
+	}),
+
+	check({
+		id: "guide/jti-entropy",
+		title: "Assertions with short jti values are refused",
+		covers: ["identity.include-unique-unguessable"],
+		leg: 1,
+		async run(t: Harness) {
+			const agent = await t.agent();
+			await t.refused("client assertion with jti 'abc'", bentToken(agent, { clientAssertion: { jti: "abc" } }), INVALID_CLIENT);
+		},
+	}),
 
 	check({
 		id: "guide/metadata-fetch-credentials",
@@ -169,7 +227,9 @@ export const identityChecks = [
 		covers: ["guide.metadata-no-credentials"],
 		leg: 1,
 		async run(t: Harness) {
-			const { agent } = await t.session();
+			const { agent, session } = await t.session();
+			// Verifying Poppy-Session loads client metadata for the delegation.
+			await t.toolOk(agent, session, t.profile("publicTool"), "a request that loads agent metadata");
 			const fetches = t.target.agents.requests.filter((r) => r.url === agent.clientId || r.url === agent.jwksUri);
 			t.ok(fetches.length > 0, "the company fetched the agent's metadata");
 			for (const request of fetches) {
@@ -180,17 +240,15 @@ export const identityChecks = [
 		},
 	}),
 
-	refusals(
-		{
-			id: "identity/unregistered",
-			title: "A company that requires registration refuses an unregistered agent with invalid_client",
-			covers: ["identity.unregistered"],
-			leg: 2,
-			expect: INVALID_CLIENT,
+	check({
+		id: "identity/unregistered",
+		title: "A company that requires registration refuses an unregistered agent with invalid_client",
+		covers: ["identity.personal-agent-authenticates"],
+		leg: 2,
+		async run(t: Harness) {
+			const path = t.profile("unregisteredClientPath");
+			const agent = await t.agent({ clientId: new URL(path, t.target.agents.origin).toString(), serve: true });
+			await t.refused("starting a token request as an unregistered agent", bentToken(agent), INVALID_CLIENT);
 		},
-		// Its metadata is served, so only the registration policy can refuse it.
-		(t) => [
-			{ label: "starting a Session as an unregistered agent", agent: { clientId: new URL(t.profile("unregisteredClientPath"), t.target.agents.origin).toString(), serve: true } },
-		],
-	),
+	}),
 ];

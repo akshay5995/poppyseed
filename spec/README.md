@@ -1,10 +1,10 @@
 # The spec, written down
 
-This folder holds the **Personal Agent Protocol** as Poppyseed implements it: the official text in [`source/`](source/), and the same text restated as numbered requirements, one version per subfolder. Code, conformance checks and status reports are all checked against the requirements, and the requirements against the official text.
+This folder holds the **Personal Agent Protocol** Poppyseed is brought in line with: the official text in [`source/`](source/), and the same text restated as numbered requirements, one version per subfolder. Code, conformance checks and status reports are checked against the requirements, and the requirements against the official text. The requirements restate published Poppy 0.4. The package still speaks protocol `0.3` until [the 0.4 plan](../docs/plans/poppy-0.4.md) is carried out.
 
 | Version | Status | Files |
 | --- | --- | --- |
-| [0.3](pap-0.3/README.md) | Draft, in progress at personalagentprotocol.org | `pap-0.3/*.md` |
+| [0.4](pap-0.4/README.md) | Published November 10, 2026, as the 1.0 release candidate. Frozen at [personalagentprotocol.org/docs/0.4/spec](https://personalagentprotocol.org/docs/0.4/spec). | `pap-0.4/*.md` |
 
 [STATUS.md](STATUS.md) is generated. It shows every requirement, who must meet it, and how we verify it.
 

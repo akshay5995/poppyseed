@@ -96,13 +96,13 @@ const response = (await poppyseed.handle(request)) ?? new Response("Not found", 
 | Path | Protocol |
 | --- | --- |
 | `GET /.well-known/poppy.json`, `/.well-known/oauth-authorization-server` | Discovery (§3) |
-| `POST /oauth/token`, `/oauth/revoke` | Sessions, sign-in grants, Account Tokens, sign-out (§4) |
-| `GET/POST /oauth/authorize`, `POST /oauth/device`, `GET/POST /poppy/device`, `POST /poppy/sign-in[/:id]` | Direct, Device and Mediated Sign-In (§4.5–4.7) |
-| `POST /mcp`, `GET /.well-known/oauth-protected-resource/mcp`, `GET /poppy/openapi.json`, `POST /poppy/tools/:name` | APIs (§6) |
-| `GET /poppy/operations/:id`, `POST …/confirm`, `POST …/cancel` | Operations extension |
-| `POST /poppy/conversations`, `POST …/:id/messages|handoff|close`, `GET …/:id/events` | Conversations (§7) |
-| `GET/POST /poppy/browser-session` | Web browsing (§5) |
-| `GET /poppy/excluded-tasks.json`, `POST /poppy/feedback` | Tasks a company doesn't offer (§8) |
+| `POST /oauth/token`, `/oauth/revoke` | Sign-in grants, refresh tokens, sign-out (§4) |
+| `GET/POST /oauth/authorize`, `POST /oauth/device`, `GET/POST /poppy/device` | Direct and Device Sign-In (§4.2–4.3); Mediated Sign-In is a token grant |
+| `POST /mcp`, `GET /.well-known/oauth-protected-resource/mcp`, `GET /poppy/openapi.json`, `POST /poppy/tools/:name` | APIs (§7), with `Poppy-Session` |
+| `GET/POST /poppy/operations`, `GET /poppy/operations/:id` | Operations extension (approve with `Poppy-Approval`) |
+| `POST /poppy/conversations`, `POST …/:id/messages|handoff|close`, `GET …/:id/events` | Conversations (§8) |
+| `GET/POST /poppy/browser-session`, `POST …/authorize` | Web browsing (§6) |
+| `GET /poppy/tasks`, `POST /poppy/feedback` | Tasks a company doesn't offer (§9) |
 
 `poppyseed.urls` gives the public URL of each, and `ROUTES` from `poppyseed/paths` lists them for framework rewrites.
 

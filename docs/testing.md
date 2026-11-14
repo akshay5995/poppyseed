@@ -64,13 +64,13 @@ The profile is optional; `--profile` takes precedence.
 
 | Hook | Does | Unlocks |
 | --- | --- | --- |
-| `siteSignIn(person)` | Returns a Cookie header for test person `"alice"` or `"bob"` signed in to your site | Direct and Device Sign-In, Account Tokens, sign-out, web browsing |
+| `siteSignIn(person)` | Returns a Cookie header for test person `"alice"` or `"bob"` signed in to your site | Direct and Device Sign-In, refresh tokens, sign-out, web browsing |
 | `connections(person)`, `disconnect(person, clientId)` | Read and change the account's connected agents | Connected-agent settings |
-| `endSession(sessionId)` | Ends a Session, named by its Session Key's thumbprint | Ending Sessions, ended keys refused, cookies not outliving them |
+| `endSession(sessionId)` | Ends a Session, named by its `sid` | Ending Sessions, `session_ended`, cookies not outliving them |
 | `staffJoin(conversationId)`, `staffReply(conversationId, text)` | Act as a person taking a handoff | Handoff to a person |
 | `staffCallTool(conversationId, name, input)` | That person calls a tool, returning `{ kind }` | Staff held to the Session's access after sign-out |
 | `lastCode()` | Returns the last Mediated Sign-In one-time code | Mediated Sign-In codes |
-| `performed(operationId)` | The terms each run of `perform` got for an operation | Performing once, only the confirmed revision, website confirms |
+| `performed(operationId)` | The terms each run of `perform` got for an operation | Performing once, only the approved revision, website approvals |
 | `settle(operationId, state, summary)` | Records an outcome `perform` couldn't tell | Unknown outcomes staying `in_progress` |
 
 Refusing unregistered agents needs no hook: give the profile an `unregisteredClientPath`. With Poppyseed most hooks are one line each: see [the reference company's hooks](https://github.com/akshay5995/poppyseed/blob/master/fixtures/reference/src/index.ts), typed as `Hooks`, and [the route that serves them](https://github.com/akshay5995/poppyseed/blob/master/fixtures/next-app/app/test-hooks/%5Bhook%5D/route.ts). Serve hooks only in test deployments, behind an environment flag that is off in production.

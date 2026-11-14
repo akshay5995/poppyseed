@@ -1,21 +1,28 @@
-import { DEVICE_CODE, JWT_BEARER } from "./oauth.ts";
+import { DEVICE_CODE } from "./oauth.ts";
 import type { Tools } from "./tools.ts";
-import { PROTOCOL_VERSION, type ResolvedConfig } from "./types.ts";
+import { BROWSER_SIGN_IN_SCOPE, PROTOCOL_VERSION, type ResolvedConfig } from "./types.ts";
 
+const ASSERTION_ALGS = ["ES256", "PS384"];
 const DPOP_ALGS = ["ES256", "RS256"];
 
 /** The document Personal Agents fetch from /.well-known/poppy.json (spec 3). */
 export function poppyDocument(config: ResolvedConfig, tools: Tools): Record<string, unknown> {
 	const { signIn, urls } = config;
-	const auth = {
+	const auth: Record<string, unknown> = {
 		issuer: urls.issuer,
-		...(signIn?.mediated ? { mediated: { endpoint: urls.mediated, fields: signIn.mediated.fields, scopes: signIn.mediated.scopes } } : {}),
-		// The OpenAPI description doesn't describe scopes, so every scope is described here (spec 4.4).
+		// The OpenAPI description doesn't describe scopes, so every scope is described here (spec 4.7).
 		...(Object.keys(config.scopes).length > 0 ? { scopes: config.scopes } : {}),
 		...(config.scopeHints ? { scope_hints: Object.fromEntries(Object.entries(config.scopeHints).map(([name, hint]) => [name, { changes: hint.changes, personal_data: hint.personalData }])) } : {}),
 	};
 	const description = config.apiDescription;
 	const apis = tools.list.length > 0 ? [{ type: "mcp", url: urls.mcp, description }, { type: "openapi", url: urls.openapi, description }] : undefined;
+	const extensions: Record<string, unknown> = {};
+	if (tools.hasOperations) {
+		extensions.operations = [{ version: "3", endpoint: urls.operations }];
+	}
+	if (signIn?.mediated) {
+		extensions["mediated-sign-in"] = [{ version: "1", scopes: signIn.mediated.scopes, fields: signIn.mediated.fields }];
+	}
 	return {
 		protocol_version: PROTOCOL_VERSION,
 		organization: config.organization,
@@ -23,10 +30,19 @@ export function poppyDocument(config: ResolvedConfig, tools: Tools): Record<stri
 		...(config.conversations ? { agent: { protocols: [{ type: "poppy", endpoint: urls.conversations }] } } : {}),
 		...(apis ? { apis } : {}),
 		// One of agent, apis or web is required; a site with neither is at least browsable.
-		...(config.web ? { web: { browser_session_endpoint: urls.browserSession } } : apis || config.conversations ? {} : { web: {} }),
-		...(config.feedback ? { feedback: { endpoint: urls.feedback } } : {}),
-		...(config.excludedTasks ? { excluded_tasks: { url: urls.excludedTasks } } : {}),
-		...(tools.hasOperations ? { extensions: { operations: { version: "1", endpoint: urls.operations } } } : {}),
+		...(config.web
+			? {
+					web: {
+						// web.disabled MUST NOT list browser_session_endpoint (spec 6).
+						...(config.web.disabled ? { disabled: true } : { browser_session_endpoint: urls.browserSession, ...(config.web.unscoped ? { unscoped: true } : {}) }),
+					},
+				}
+			: apis || config.conversations
+				? {}
+				: { web: {} }),
+		// Excluded tasks, skill index and feedback move to tasks.endpoint (spec 9).
+		...(config.excludedTasks || config.feedback ? { tasks: { endpoint: urls.tasks } } : {}),
+		...(Object.keys(extensions).length > 0 ? { extensions } : {}),
 	};
 }
 
@@ -36,17 +52,20 @@ export function poppyDocument(config: ResolvedConfig, tools: Tools): Record<stri
  * domain whose poppy.json names this issuer.
  */
 export function authorizationServerMetadata(config: ResolvedConfig, tools: Tools): Record<string, unknown> {
-	const grants = [JWT_BEARER, "refresh_token"];
+	const grants = ["refresh_token"];
+	const scopes = Object.keys(config.scopes);
+	if (config.web && !scopes.includes(BROWSER_SIGN_IN_SCOPE)) scopes.push(BROWSER_SIGN_IN_SCOPE);
 	const meta: Record<string, unknown> = {
 		issuer: config.urls.issuer,
 		token_endpoint: config.urls.token,
 		revocation_endpoint: config.urls.revoke,
+		// https://{domain} with no path, port, or trailing slash (spec 3.2).
 		protected_resources: [`https://${config.organization.domain}`, ...(tools.list.length > 0 ? [config.urls.mcp] : [])],
 		token_endpoint_auth_methods_supported: ["private_key_jwt"],
-		token_endpoint_auth_signing_alg_values_supported: DPOP_ALGS,
+		token_endpoint_auth_signing_alg_values_supported: ASSERTION_ALGS,
 		revocation_endpoint_auth_methods_supported: ["private_key_jwt"],
 		dpop_signing_alg_values_supported: DPOP_ALGS,
-		scopes_supported: Object.keys(config.scopes),
+		scopes_supported: scopes,
 		authorization_response_iss_parameter_supported: true,
 	};
 	if (config.signIn?.direct) {
@@ -59,11 +78,14 @@ export function authorizationServerMetadata(config: ResolvedConfig, tools: Tools
 		meta.device_authorization_endpoint = config.urls.deviceAuthorization;
 		grants.push(DEVICE_CODE);
 	}
+	if (config.signIn?.mediated) {
+		grants.push("https://personalagentprotocol.org/grant/mediated-sign-in");
+	}
 	meta.grant_types_supported = grants;
 	return meta;
 }
 
-/** Protected resource metadata for the MCP server (RFC 9728, spec 6). Listing DPoP algorithms says it supports DPoP (spec 4.3). */
+/** Protected resource metadata for the MCP server (RFC 9728, spec 7). Listing DPoP algorithms says it supports DPoP (spec 4.5). */
 export function mcpResourceMetadata(config: ResolvedConfig): Record<string, unknown> {
 	return {
 		resource: config.urls.mcp,

@@ -1,6 +1,6 @@
 # How the protocol works
 
-Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org), Poppy for short. The exact rules are in [the spec](https://personalagentprotocol.org/docs/spec); this page explains the ideas.
+Poppyseed implements the [Personal Agent Protocol](https://personalagentprotocol.org/docs/0.4/spec), Poppy for short. The exact rules are in [the Poppy 0.4 spec](https://personalagentprotocol.org/docs/0.4/spec); this page explains the ideas.
 
 ## Three parties
 
@@ -12,21 +12,21 @@ Without the protocol, agents scrape pages and type the person's password into yo
 
 ## Discovery
 
-Your site describes itself at `/.well-known/poppy.json`: who you are, your OAuth server, your scopes, your APIs (MCP and OpenAPI), your Company Agent, web browsing, the tasks you don't offer agents, and extensions. Your OAuth server's metadata says which sign-in types you offer, and confirms the link back with `protected_resources`. Poppyseed generates both from your config.
+Your site describes itself at `/.well-known/poppy.json`: who you are, your OAuth server, your scopes, your APIs (MCP and OpenAPI), your Company Agent, web browsing, a `tasks.endpoint` for what you don't offer agents, and extensions. Your OAuth server's metadata says which sign-in types you offer, and confirms the link back with `protected_resources`. Poppyseed generates both from your config.
 
 ## Sessions
 
-Everything an agent does at your site happens in a **Session**: one User, one Company, one Personal Agent. It starts signed out.
+Everything an agent does at your site happens in a **Session**: one User, one Company, one Personal Agent. It starts signed out. There is no separate call to start one; the first request with a new `sid` starts it.
 
-Agents have no password. An agent proves who it is with a key: it publishes a metadata document at its `client_id` URL, which points to its public keys (`jwks_uri`), and signs an assertion addressed to your issuer. You check it and issue a **Session Token**.
+Agents have no password. An agent proves who it is with a key: it publishes a metadata document at its `client_id` URL, which points to its public keys (`jwks_uri`), and signs assertions addressed to your issuer.
 
-Each Session has its own key pair, the **Session Key**, made by the agent. The key's thumbprint names the Session, and every Session Token is bound to it with DPoP: each request carries a fresh proof signed with the key, so a stolen token is useless. A new key starts a new Session; the same key renews it. A token for your MCP server is a DPoP token issued for its URL only.
+Every request to an API, conversation, or other protocol endpoint carries **`Poppy-Session`**: a JWT signed for that one request with a delegated key. A key from `jwks_uri` vouches for the delegated key. Signed-out requests carry the Session header and no access token. Signed-in requests also carry `Authorization` with the access token (often DPoP-bound, so each request has a fresh proof).
 
-Session Tokens are short-lived and opaque to agents; Poppyseed seals them, so agents can't read or change them. An agent's browser can join the same Session ([web browsing](guides.md#let-agents-browse-your-site)).
+An agent's browser can join the same Session ([web browsing](guides.md#let-agents-browse-your-site)).
 
 ## Signing in
 
-You define your own **scopes**, such as `trips:read`, each with a description agents and people read. A tool's scope says it needs the User's account with that access. A signed-out Session has no scopes, so calling it gets `insufficient_scope`, naming the scope. The agent uses its Account Token if it has one, or has the person sign in one of three ways:
+You define your own **scopes**, such as `trips:read`, each with a description agents and people read. A tool's scope says it needs the User's account with that access. A signed-out Session has no scopes, so calling it gets `insufficient_scope`, naming the scope. The agent uses a refresh token if it has one, or has the person sign in one of three ways:
 
 | Sign-in | The person | Use when |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ You define your own **scopes**, such as `trips:read`, each with a description ag
 | Device | enters a short code on your site | the agent can't receive a browser redirect, such as a speaker or chat app |
 | Mediated | gives the agent their credentials | transitional: only until Direct or Device covers what people need; keep its scopes narrow |
 
-Each ends with a signed-in Session Token and an **Account Token**, so next time the agent signs in without asking. People see and disconnect agents in their account settings. Signing out or disconnecting stops the signed-in tokens at once, and the Session continues signed out.
+Each ends with an access token and a **refresh token**, so next time the agent can get access without asking again. A refresh token is not tied to one Session; any of the user's Sessions can use access tokens from it. People see and disconnect agents in their account settings. Signing out or disconnecting revokes the refresh tokens at once, and the Session continues signed out.
 
 ## Tools
 
@@ -42,11 +42,11 @@ A tool has a name, description, input schema and scope. Each one is served twice
 
 ## Operations
 
-An action with consequences (a booking, a charge, a cancellation) can be an **operation**, part of the [operations extension](https://personalagentprotocol.org/docs/extensions/operations) that both you and the agent opt into:
+An action with consequences (a booking, a charge, a cancellation) can be an **operation**, part of the [operations extension](https://personalagentprotocol.org/docs/0.4/extensions/operations) that both you and the agent opt into:
 
 1. **Propose.** You work out the terms without changing anything, and answer with an operation: id, revision, summary, terms.
-2. **Approve.** The agent shows the person your name and the summary and gets their approval, or applies a permission they gave earlier. Changed terms make a new revision; only the latest can be confirmed.
-3. **Confirm.** You perform it **at most once**, however many times it is confirmed.
+2. **Approve.** The agent shows the person your name and the summary and gets their approval, or applies a permission they gave earlier. Changed terms make a new revision; only the latest can be approved.
+3. **Perform.** The agent retries the same request with `Poppy-Approval`. You perform it **at most once**, however many times that approval is sent.
 4. **Track.** It ends `succeeded`, `failed`, `cancelled` or `expired`. `failed` means it wasn't completed, and its result says what changed, if anything; an unknown outcome stays `in_progress`.
 
 ## Conversations
@@ -55,7 +55,7 @@ Agents can talk to your own agent, the **Company Agent**, which uses your tools 
 
 ## Tasks you don't offer
 
-You can list the tasks you chose not to offer agents, such as a wire transfer that only your app allows, with another way to do each. Agents then tell the person right away instead of trying every interface. Agents can also report a task they couldn't do, and you can answer with a way to do it.
+Agents fetch excluded tasks and related coverage from `tasks.endpoint` with the Session header and no access token, early in each Session. You can list tasks you chose not to offer agents, such as a wire transfer that only your app allows, with another way to do each. Agents then tell the person right away instead of trying every interface. Agents can also report a task they couldn't do, and you can answer with a way to do it.
 
 ## What you write
 

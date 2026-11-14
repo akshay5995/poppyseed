@@ -1,0 +1,35 @@
+---
+title: "An operation"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Start
+    lg1: Waiting
+    lg2: Performed
+    lg3: Declined
+  }
+  class lg0 tan
+  class lg1 orange
+  class lg2 teal
+  class lg3 purple
+  s0: No operation
+  s1: Needs approval
+  s2: Declined
+  s3: Performed, agent approved
+  s4: Performed, user approved
+  s5: Needs approval, new revision
+  [*] --> s0
+  s0 --> s1: the tool asks for approval
+  s1 --> s2: the user declines
+  s1 --> s3: approve and run it once
+  s1 --> s4: approve and run it once
+  s1 --> s5: terms change, so a new revision
+  s5 --> s2: the user declines
+  s5 --> s3: approve and run it once
+  s5 --> s4: approve and run it once
+  class s0 tan
+  class s1 orange
+  class s2 purple
+  class s3 teal
+  class s4 teal
+  class s5 orange

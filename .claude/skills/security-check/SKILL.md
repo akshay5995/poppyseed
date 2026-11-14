@@ -22,12 +22,12 @@ The test agent (`src/agent/`), the checks (`src/conformance/`) and `fixtures/ref
 Each line is a rule the code must keep. For each one the diff touches, find the code that enforces it, and trace a request from outside to it.
 
 **Tokens and Sessions**
-- Session Tokens are sealed and opaque (`tokens.ts`). Each sealer purpose is bound in, so one kind of token never opens as another.
+- Access tokens are sealed and opaque (`tokens.ts`, purpose `access`). Each sealer purpose is bound in, so one kind of token never opens as another. `Poppy-Session` is a `poppy-session+jwt`, verified in `session.ts`, not a sealed session token.
 - Tokens never appear in URLs or logs. `guard.ts` refuses `access_token` in a query.
-- Every API request reloads the Session (`loadSession` with the token's `cid` and `uid`). Nothing trusts a stored copy of a caller.
-- A signed-in token works only while the sign-in it was issued under lasts (`claims.sign` equals `signedIn.tokenHash`). The scopes are the overlap of the token's scopes and the live sign-in's scopes.
-- Anything that acts later for a caller (conversations, operations, staff, Company Agent turns) uses the caller's Session as it is now, never a copy saved earlier. `ConversationStore.current` is the pattern.
-- An MCP token (`res` is the MCP URL) works only at the MCP server, and other tokens only elsewhere.
+- Every API request verifies `Poppy-Session` (`verifySessionHeader`). When an access token is present, `guard.ts` opens it and requires `cid` to match that Session's client. The account is the refresh record named by `rth`, reloaded on the request, not a copy kept on the token.
+- An access token works only while that refresh token still exists (`key.accountToken(claims.rth)`, same client). Scopes are the overlap of the token's scopes and the live refresh record's scopes. Sign-out deletes the refresh record.
+- Anything that acts later for a caller (conversations, operations, staff, Company Agent turns) uses the caller's Session as it is now, never a copy saved earlier. `ConversationStore.current` reloads the connection.
+- An MCP token (`res` is the MCP URL) works only at the MCP server, and other tokens only elsewhere. A token for the MCP resource requires DPoP.
 
 **DPoP and grants**
 - `verifyDpop` checks: one proof, `typ`, ES256/RS256 only, a public `jwk`, `htm`, `htu` without query, `iat` within the window, `jti` used once, and the nonce or `ath` and key binding when given.

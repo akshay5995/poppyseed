@@ -5,7 +5,7 @@ description: Prove that poppyseed/next serves the Personal Agent Protocol correc
 
 # Verify poppyseed/next
 
-The surface is HTTP: Personal Agents reach a company's Next.js site at `/.well-known/poppy.json`, `/oauth/*`, `/mcp`, `/poppy/*`. `withPoppyseed()` rewrites those paths to the catch-all route that `toNextHandlers()` serves. The fixture app at `fixtures/next-app` is a minimal Next.js 16 site doing exactly that for the reference company in `fixtures/reference/src/index.ts`, which turns on every feature. Drive it from outside, as an agent would: the conformance CLI and the test agent are the harness. Never verify against `site/` (Poppy Travel); that is a demo, not the framework.
+The surface is HTTP, protocol 0.4: Personal Agents reach a company's Next.js site at `/.well-known/poppy.json`, `/oauth/*`, `/mcp`, `/poppy/*`. Resource requests carry `Poppy-Version: 0.4` and `Poppy-Session` (a JWT, `typ` `poppy-session+jwt`). Signed-in requests also carry `Authorization`. `withPoppyseed()` rewrites those paths to the catch-all route that `toNextHandlers()` serves. The fixture app at `fixtures/next-app` is a minimal Next.js 16 site doing exactly that for the reference company in `fixtures/reference/src/index.ts`, which turns on every feature. Drive it from outside, as an agent would: the conformance CLI and the test agent are the harness. Never verify against `site/` (Poppy Travel); that is a demo, not the framework.
 
 Helper: `scripts/fixture.sh` (below as `fixture.sh`), the same launcher `pnpm e2e` uses. Run it from the repo root. State and evidence live in `.verify/next/` (git-ignored).
 
@@ -43,7 +43,7 @@ scripts/fixture.sh check --only conv/,ops/
 scripts/fixture.sh check --only web.verify-assertion --all
 ```
 
-Explore by hand with the test agent (discovers, starts a Session, lists and calls MCP tools):
+Explore by hand with the test agent (discovers protocol 0.4, starts a Session locally, lists and calls MCP tools with `Poppy-Session`):
 
 ```sh
 pnpm --filter poppyseed poppyseed agent http://localhost:3110 echo '{"text":"hi"}'

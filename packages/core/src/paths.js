@@ -19,6 +19,8 @@ export const PATHS = {
 	conversations: "/poppy/conversations",
 	feedback: "/poppy/feedback",
 	excludedTasks: "/poppy/excluded-tasks.json",
+	/** Session-scoped task coverage: excluded tasks, skill index, feedback endpoint (spec 9). */
+	tasks: "/poppy/tasks",
 };
 
 /**
@@ -38,13 +40,16 @@ export const ROUTES = [
 	PATHS.mediated,
 	`${PATHS.mediated}/:id`,
 	PATHS.browserSession,
+	`${PATHS.browserSession}/authorize`,
 	PATHS.mcp,
 	PATHS.openapi,
 	`${PATHS.tools}/:name`,
+	PATHS.operations,
 	`${PATHS.operations}/:id`,
-	`${PATHS.operations}/:id/:action`,
 	PATHS.conversations,
 	`${PATHS.conversations}/:id/:action`,
+	`${PATHS.conversations}/:id/:action/:sub`,
 	PATHS.feedback,
 	PATHS.excludedTasks,
+	PATHS.tasks,
 ];

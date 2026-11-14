@@ -13,7 +13,7 @@ import {
 	type HostedAgentOptions,
 	type Operation,
 	type Person,
-	type SessionKey,
+	type Session as AgentSession,
 	type TargetProfile,
 	type TestAgent,
 	type TokenResponse,
@@ -22,7 +22,7 @@ import {
 
 export type { Hooks, Person, TargetProfile } from "../agent/index.ts";
 
-export const OPERATIONS_EXTENSION = { operations: { version: "1" } };
+export const OPERATIONS_EXTENSION = { operations: "3" };
 
 export interface Target {
 	/** Public origin of the company, e.g. https://poppy.travel. */
@@ -56,14 +56,15 @@ export interface ExpectedRefusal {
 /** An agent with a Session at the company. */
 export interface Session {
 	agent: TestAgent;
-	token: TokenResponse;
+	session: AgentSession;
+	token?: TokenResponse;
 }
 
 /** An agent whose Session was signed in by Direct Sign-In. */
 export interface SignedIn extends Session {
 	token: TokenResponse & { refresh_token: string };
-	/** The token from before the sign-in. */
-	signedOut: TokenResponse;
+	/** The Session from before the sign-in. */
+	signedOut: AgentSession;
 }
 
 export interface SignInOptions {
@@ -88,6 +89,11 @@ interface OpenApiDocument {
 	servers?: { url: string }[];
 	paths?: Record<string, Record<string, { operationId?: string; responses?: Record<string, unknown> }>>;
 }
+
+/** Endpoint keys whose values are URL strings (not the mediated object). */
+type StringEndpoint = {
+	[K in keyof Endpoints]-?: Endpoints[K] extends string | undefined ? K : never;
+}[keyof Endpoints];
 
 /** Every scope in `a` is in `b`; with `exact`, they are the same set. */
 export function scopesIn(a: string, b: string, exact = false): boolean {
@@ -142,32 +148,44 @@ export class Harness {
 		return this.discovered;
 	}
 
-	/** An endpoint the company offers, or a skip. */
-	endpoint(name: keyof Endpoints): string {
+	/** An endpoint URL the company offers, or a skip. */
+	endpoint(name: StringEndpoint): string {
 		const url = this.company.endpoints[name];
-		if (!url) this.skip(`the company offers no ${name} endpoint`);
+		if (typeof url !== "string" || !url) this.skip(`the company offers no ${name} endpoint`);
 		return url;
 	}
 
-	/** A fresh agent with a signed-out DPoP Session, or one signed in by Direct Sign-In. */
+	/** Mediated Sign-In extension fields, or a skip. */
+	mediated(): NonNullable<Endpoints["mediated"]> {
+		const value = this.company.endpoints.mediated;
+		if (!value) this.skip("the company offers no mediated sign-in");
+		return value;
+	}
+
+	/** A fresh agent with a signed-out Session, or one signed in by Direct Sign-In. */
 	session(options: SessionOptions & { signIn: string | true }): Promise<SignedIn>;
 	session(options?: SessionOptions): Promise<Session>;
 	async session(options: SessionOptions = {}): Promise<Session> {
 		const agent = await this.agent(options.agent);
 		const signedOut = await agent.startSession();
-		if (options.signIn == null) return { agent, token: signedOut };
+		if (options.signIn == null) return { agent, session: signedOut };
 		const scope = options.signIn === true ? undefined : options.signIn;
-		const token = await this.signInDirect(agent, signedOut.session, { ...options, scope });
+		const token = await this.signInDirect(agent, signedOut, { ...options, scope });
 		this.ok(token.refresh_token, "sign-in returns the Account Token in refresh_token");
-		const signedIn: SignedIn = { agent, signedOut, token: { ...token, refresh_token: token.refresh_token } };
+		const signedIn: SignedIn = {
+			agent,
+			session: token.session,
+			signedOut,
+			token: { ...token, refresh_token: token.refresh_token },
+		};
 		return signedIn;
 	}
 
 	/** A token for the MCP server, for the same Session, signed in when it is. Skips when the company has no MCP API. */
-	async mcpToken({ agent, token }: Session): Promise<{ url: string; token: string; response: TokenResponse }> {
+	async mcpToken({ agent, session, token }: Session): Promise<{ url: string; token: string; response: TokenResponse }> {
 		const url = this.endpoint("mcp");
-		const options = { session: token.session, resource: url };
-		const response = token.refresh_token ? await agent.refresh(token.refresh_token, options) : await agent.startSession(options);
+		this.ok(token?.refresh_token, "mcpToken needs a signed-in Session with a refresh_token");
+		const response = await agent.refresh(token.refresh_token, { session, resource: url });
 		return { url, token: response.access_token, response };
 	}
 
@@ -204,13 +222,14 @@ export class Harness {
 	 */
 	offered(type: "direct" | "device"): string[] {
 		const grant = type === "direct" ? "authorization_code" : "urn:ietf:params:oauth:grant-type:device_code";
-		const { grant_types_supported: grants = [], scopes_supported: scopes = [] } = this.company.metadata;
-		if (!grants.includes(grant) || scopes.length === 0) this.skip(`the company does not offer ${type === "direct" ? "Direct" : "Device"} Sign-In`);
+		const grants: string[] = this.company.metadata.grant_types_supported;
+		const scopes: string[] = this.company.metadata.scopes_supported ?? [];
+		if (!grants.some((g) => g === grant) || scopes.length === 0) this.skip(`the company does not offer ${type === "direct" ? "Direct" : "Device"} Sign-In`);
 		return scopes;
 	}
 
-	/** Runs Direct Sign-In for the Session `session` names. Returns the token response. */
-	async signInDirect(agent: TestAgent, session: SessionKey, options: SignInOptions = {}): Promise<TokenResponse> {
+	/** Runs Direct Sign-In for the Session. Returns the token response. */
+	async signInDirect(agent: TestAgent, session: AgentSession, options: SignInOptions = {}): Promise<TokenResponse> {
 		const scope = options.scope ?? this.offered("direct").join(" ");
 		const browser = await this.browser(options.person ?? "alice");
 		const request = await agent.authorizationRequest(scope, session, { redirectUri: options.redirectUri });
@@ -250,27 +269,61 @@ export class Harness {
 		this.fail(`the OpenAPI description has no POST operation ${operationId}`);
 	}
 
-	/** Calls a tool over OpenAPI with a DPoP Session Token. */
-	async callTool(agent: TestAgent, token: string, tool: Tool): Promise<Response> {
-		return agent.dpopJson(await this.openApiOperation(tool.name), token, tool.arguments);
+	/** Calls a tool over OpenAPI with Poppy-Session (and an access token when signed in). */
+	async callTool(agent: TestAgent, session: AgentSession, tool: Tool, accessToken?: string): Promise<Response> {
+		return agent.sessionJson(await this.openApiOperation(tool.name), session, tool.arguments, accessToken !== undefined ? { accessToken } : {});
 	}
 
-	async toolOk(agent: TestAgent, token: string, tool: Tool, label: string): Promise<void> {
-		this.equal((await this.callTool(agent, token, tool)).status, 200, `${label} (${tool.name})`);
+	async toolOk(agent: TestAgent, session: AgentSession, tool: Tool, label: string, accessToken?: string): Promise<void> {
+		this.equal((await this.callTool(agent, session, tool, accessToken)).status, 200, `${label} (${tool.name})`);
 	}
 
-	/** Calls a tool and expects a 403 whose error is `error`. */
-	async toolRefused(agent: TestAgent, token: string, tool: Tool, error: string, label: string): Promise<void> {
-		await this.refusedResponse(label, await this.callTool(agent, token, tool), { status: 403, error, challenge: `error="${error}"` });
+	/** Calls a tool and expects a 403 whose error is `error` (WWW-Authenticate when `challenge` is set). */
+	async toolRefused(agent: TestAgent, session: AgentSession, tool: Tool, error: string, label: string, accessToken?: string, challenge?: string): Promise<void> {
+		await this.refusedResponse(label, await this.callTool(agent, session, tool, accessToken), {
+			status: 403,
+			error,
+			...(challenge !== undefined ? { challenge } : error === "insufficient_scope" ? { challenge: `error="${error}"` } : {}),
+		});
 	}
 
-	/** Calls an operation tool over OpenAPI and returns the proposed operation from the 202. */
-	async propose(agent: TestAgent, token: string, tool: Tool): Promise<Operation> {
-		const response = await this.callTool(agent, token, tool);
-		const body = (await readBody(response)) as { operation?: Operation } | null;
-		this.equal(response.status, 202, `calling ${tool.name} proposes an operation with HTTP 202 (${JSON.stringify(body).slice(0, 160)})`);
-		this.ok(body?.operation?.operation_id, "the 202 body has the operation in `operation`");
+	/**
+	 * Calls an operation tool over OpenAPI and returns the operation from
+	 * `approval_required` (HTTP 403 JSON, operations extension v3).
+	 */
+	async propose(agent: TestAgent, session: AgentSession, tool: Tool, accessToken?: string): Promise<Operation> {
+		const response = await this.callTool(agent, session, tool, accessToken);
+		const body = (await readBody(response)) as { error?: string; operation?: Operation } | null;
+		this.equal(response.status, 403, `calling ${tool.name} asks for approval with HTTP 403 (${JSON.stringify(body).slice(0, 160)})`);
+		this.equal(body?.error, "approval_required", "error is approval_required");
+		this.ok(body?.operation?.operation_id, "the body has the operation in `operation`");
+		this.ok(body.operation.terms && typeof body.operation.terms === "object", "operation.terms is required");
+		const challenge = response.headers.get("www-authenticate") ?? "";
+		this.ok(!challenge.includes("approval_required"), `approval_required is not a WWW-Authenticate challenge, got ${challenge || "none"}`);
 		return body.operation;
+	}
+
+	/** Retries the same OpenAPI tool call with Poppy-Approval. */
+	async approveTool(
+		agent: TestAgent,
+		session: AgentSession,
+		tool: Tool,
+		operation: Operation,
+		options: { accessToken?: string; approver?: "user" | "agent"; approved_at?: number; input_type?: string } = {},
+	): Promise<Response> {
+		const url = await this.openApiOperation(tool.name);
+		return agent.approve(
+			session,
+			{ url, body: tool.arguments },
+			{
+				operation_id: operation.operation_id,
+				revision: operation.revision,
+				approver: options.approver ?? "user",
+				...(options.approved_at !== undefined ? { approved_at: options.approved_at } : {}),
+				...(options.input_type !== undefined ? { input_type: options.input_type } : {}),
+			},
+			options.accessToken !== undefined ? { accessToken: options.accessToken } : {},
+		);
 	}
 
 	/** The conversation profile, or a skip. Also skips when the company offers no poppy conversations. */
@@ -294,19 +347,35 @@ export class Harness {
 		}
 	}
 
-	/** Reads a conversation from the beginning until `done` holds for the events so far. Returns every event read. */
-	eventsUntil(agent: TestAgent, token: string, id: string, done: (events: ConversationEvent[]) => boolean, seconds = 10): Promise<ConversationEvent[]> {
+	/** Reads a conversation from the beginning until `done` holds for the events (and latest page) so far. Returns every event read. */
+	eventsUntil(
+		agent: TestAgent,
+		session: AgentSession,
+		id: string,
+		done: (events: ConversationEvent[], page: { working: boolean; handoff: string; responder: string; closed: boolean }) => boolean,
+		seconds = 10,
+		accessToken?: string,
+	): Promise<ConversationEvent[]> {
 		const events: ConversationEvent[] = [];
 		let cursor: string | undefined;
+		let lastPage = { working: false, handoff: "none", responder: "agent", closed: false };
 		return this.until(
 			async (left) => {
-				const page = await agent.events(token, id, { cursor, wait: Math.min(left, 2) });
+				const page = await agent.events(session, id, {
+					cursor,
+					wait: Math.min(left, 2),
+					...(accessToken !== undefined ? { accessToken } : {}),
+				});
 				for (const event of page.events) if (!events.some((e) => e.id === event.id)) events.push(event);
 				cursor = page.cursor ?? cursor;
-				return done(events) ? events : undefined;
+				lastPage = { working: page.working, handoff: page.handoff, responder: page.responder, closed: page.closed };
+				return done(events, lastPage) ? events : undefined;
 			},
 			seconds,
-			() => `the expected events did not arrive within ${seconds}s; got ${events.map((e) => e.type + (e.status ? `:${e.status}` : "")).join(", ")}`,
+			() =>
+				`the expected events did not arrive within ${seconds}s; working=${lastPage.working} handoff=${lastPage.handoff} responder=${lastPage.responder} closed=${lastPage.closed}; got ${events
+					.map((e) => e.type + (e.closed ? ":closed" : e.handoff ? `:handoff:${e.handoff}` : e.responder ? `:responder:${e.responder}` : ""))
+					.join(", ")}`,
 		);
 	}
 

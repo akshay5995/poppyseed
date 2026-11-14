@@ -2,15 +2,21 @@ import type { MediatedResponse } from "../../agent/index.ts";
 import { check } from "../check.ts";
 import type { Harness } from "../harness.ts";
 
+const MEDIATED_GRANT = "https://personalagentprotocol.org/grant/mediated-sign-in";
+
 /** A signed-out Session, the test accounts and the scope Mediated Sign-In offers. Skips without them. */
 async function mediated(t: Harness) {
 	const session = await t.session();
-	t.endpoint("mediated");
-	const scope = session.agent.company.poppy.auth?.mediated?.scopes[0] ?? t.skip("auth.mediated lists no scopes");
-	return { ...session, ...t.profile("mediated"), scope };
+	const ext = t.mediated();
+	const scope = ext.scopes[0] ?? t.skip("mediated-sign-in lists no scopes");
+	return { ...session, ...t.profile("mediated"), scope, ext };
 }
 
-const status = (body: MediatedResponse) => (typeof body === "object" && "status" in body ? body.status : undefined);
+const errorOf = (body: MediatedResponse) => (typeof body === "object" && body !== null && "error" in body ? body.error : undefined);
+const isComplete = (body: MediatedResponse): body is Extract<MediatedResponse, { status: "complete" }> =>
+	typeof body === "object" && body !== null && "status" in body && body.status === "complete";
+type MediatedError = Extract<MediatedResponse, { error: string }>;
+const asError = (body: MediatedResponse): MediatedError | undefined => ("error" in body ? body : undefined);
 
 /** Fails if any credential value appears anywhere in a response. */
 function noCredentials(t: Harness, body: unknown, credentials: Record<string, string>, label: string) {
@@ -20,21 +26,54 @@ function noCredentials(t: Harness, body: unknown, credentials: Record<string, st
 
 export const mediatedChecks = [
 	check({
-		id: "mediated/sign-in",
-		title: "Mediated Sign-In with correct credentials completes with an Account Token and a signed-in token for the Session, and never returns the credentials",
-		covers: ["mediated.flow", "mediated.no-credentials-returned", "signin.response", "signin.grantable"],
+		id: "mediated/grant",
+		title: "Mediated Sign-In is the OAuth grant at the token endpoint; the old /poppy/sign-in paths are gone",
+		covers: ["oauth.extension-grant-mediated", "mediated.sign-through-returns", "mediated.credentials-correct-nothing", "mediated.company-grant-scopes"],
 		leg: 5,
 		async run(t: Harness) {
-			const { agent, token, credentials, scope } = await mediated(t);
-			const { httpStatus, body } = await agent.mediatedSignIn(token.access_token, { scope, credentials });
-			t.equal(httpStatus, 200, "status code");
-			t.ok(status(body) === "complete" && "access_token" in body, `status complete, got ${JSON.stringify(body).slice(0, 120)}`);
+			const { agent, session, credentials, scope, ext } = await mediated(t);
+			const grants: string[] = agent.company.metadata.grant_types_supported;
+			t.ok(grants.some((g) => g === MEDIATED_GRANT), `grant_types_supported lists ${MEDIATED_GRANT}`);
+			t.ok(ext.fields.length > 0, "mediated-sign-in lists fields");
+			t.ok(ext.scopes.some((s) => s === scope), `extension scopes include ${scope}`);
+
+			const { httpStatus, body } = await agent.mediatedSignIn(session, { scope, credentials });
+			t.equal(httpStatus, 200, "mediated grant status code");
+			t.ok(isComplete(body), `status complete, got ${JSON.stringify(body).slice(0, 120)}`);
 			t.equal(body.scope ?? scope, scope, "scope");
 			t.equal(body.token_type, "DPoP", "token_type");
-			t.ok(body.refresh_token, "the Account Token arrives in refresh_token");
-			// The token is for the current Session: bound to its key.
+			t.ok(body.refresh_token, "sign-in returns a refresh token");
 			const scoped = t.target.profile?.scopedTool;
-			if (scoped?.scope === scope) await t.toolOk(agent, body.access_token, scoped, "the signed-in token");
+			if (scoped?.scope === scope) await t.toolOk(agent, session, scoped, "the signed-in token", body.access_token);
+			noCredentials(t, body, credentials, "the response");
+
+			// The 0.3 mediated endpoint paths must not exist.
+			for (const path of ["/poppy/sign-in", "/poppy/sign-in/sgn_anything"]) {
+				const response = await t.fetch(path, {
+					method: "POST",
+					headers: { "content-type": "application/json", accept: "application/json" },
+					body: JSON.stringify({ scope, credentials }),
+				});
+				t.equal(response.status, 404, `${path} returns 404`);
+			}
+		},
+	}),
+
+	check({
+		id: "mediated/sign-in",
+		title: "Mediated Sign-In with correct credentials completes with a refresh token and a signed-in access token, and never returns the credentials",
+		covers: ["mediated.credentials-correct-nothing", "mediated.sign-through-returns", "mediated.keep-anywhere-else", "scopes.sign-returns-access"],
+		leg: 5,
+		async run(t: Harness) {
+			const { agent, session, credentials, scope } = await mediated(t);
+			const { httpStatus, body } = await agent.mediatedSignIn(session, { scope, credentials });
+			t.equal(httpStatus, 200, "status code");
+			t.ok(isComplete(body), `status complete, got ${JSON.stringify(body).slice(0, 120)}`);
+			t.equal(body.scope ?? scope, scope, "scope");
+			t.equal(body.token_type, "DPoP", "token_type");
+			t.ok(body.refresh_token, "sign-in returns a refresh token");
+			const scoped = t.target.profile?.scopedTool;
+			if (scoped?.scope === scope) await t.toolOk(agent, session, scoped, "the signed-in token", body.access_token);
 			noCredentials(t, body, credentials, "the response");
 		},
 	}),
@@ -42,71 +81,78 @@ export const mediatedChecks = [
 	check({
 		id: "mediated/failures",
 		title: "A wrong password and an unknown account fail the same way, without the credentials",
-		covers: ["mediated.no-credentials-returned", "guide.company-mediated", "mediated.flow", "mediated.errors"],
+		covers: ["mediated.invalid-grant-sign", "mediated.invalid-scope-scopes", "mediated.keep-anywhere-else", "guide.prefer-direct-device"],
 		leg: 5,
 		async run(t: Harness) {
-			const { agent, token, credentials, wrongPassword, unknownAccount, scope } = await mediated(t);
-			const wrong = await agent.mediatedSignIn(token.access_token, { scope, credentials: wrongPassword });
-			const unknown = await agent.mediatedSignIn(token.access_token, { scope, credentials: unknownAccount });
-			t.equal(status(wrong.body), "failed", `a wrong password fails, got ${JSON.stringify(wrong.body)}`);
+			const { agent, session, credentials, wrongPassword, unknownAccount, scope } = await mediated(t);
+			const wrong = await agent.mediatedSignIn(session, { scope, credentials: wrongPassword });
+			const unknown = await agent.mediatedSignIn(session, { scope, credentials: unknownAccount });
+			t.equal(errorOf(wrong.body), "invalid_grant", `a wrong password fails, got ${JSON.stringify(wrong.body)}`);
 			t.equal(`${unknown.httpStatus} ${JSON.stringify(unknown.body)}`, `${wrong.httpStatus} ${JSON.stringify(wrong.body)}`, "an unknown account fails exactly like a wrong password");
 			noCredentials(t, wrong.body, wrongPassword, "the failure");
 			noCredentials(t, unknown.body, unknownAccount, "the failure");
-			const bad = await agent.mediatedSignIn(token.access_token, { scope: "not-a-scope", credentials });
-			t.ok(bad.httpStatus === 400 && "error" in bad.body && bad.body.error === "invalid_scope", `an unknown scope is invalid_scope (400), got ${bad.httpStatus} ${JSON.stringify(bad.body)}`);
+			const bad = await agent.mediatedSignIn(session, { scope: "not-a-scope", credentials });
+			t.ok(bad.httpStatus === 400 && errorOf(bad.body) === "invalid_scope", `an unknown scope is invalid_scope (400), got ${bad.httpStatus} ${JSON.stringify(bad.body)}`);
 			noCredentials(t, bad.body, credentials, "the error");
-			const unknownId = await agent.mediatedSignIn(token.access_token, { code: "123456" }, "sgn_does_not_exist");
-			t.ok(unknownId.httpStatus === 404 && "error" in unknownId.body && unknownId.body.error === "sign_in_not_found", `an unknown sign_in_id is sign_in_not_found (404), got ${unknownId.httpStatus} ${JSON.stringify(unknownId.body)}`);
+			const unknownId = await agent.mediatedSignIn(session, { sign_in_id: "sgn_does_not_exist", one_time_code: "123456" });
+			t.ok(unknownId.httpStatus === 400 && errorOf(unknownId.body) === "invalid_grant", `an unknown sign_in_id is invalid_grant (400), got ${unknownId.httpStatus} ${JSON.stringify(unknownId.body)}`);
 		},
 	}),
 
 	check({
 		id: "mediated/code",
-		title: "An unusual sign-in needs a one-time code: wrong codes ask again until the limit, only its Session can finish it",
-		covers: ["mediated.otp-unusual", "mediated.flow", "mediated.errors"],
+		title: "An unusual sign-in needs a one-time code: wrong codes ask again until the limit, only its client can finish it",
+		covers: ["mediated.company-needs-second", "mediated.correct-code-returns", "mediated.wrong-code-returns", "mediated.code-required-company"],
 		leg: 5,
 		async run(t: Harness) {
 			const lastCode = t.hook("lastCode");
-			const { agent, token, codeCredentials, scope } = await mediated(t);
+			const { agent, session, codeCredentials, scope } = await mediated(t);
 			if (!codeCredentials) t.skip("target profile has no mediated.codeCredentials");
-			const start = (sessionToken: string) => agent.mediatedSignIn(sessionToken, { scope, credentials: codeCredentials });
+			const start = (s: typeof session) => agent.mediatedSignIn(s, { scope, credentials: codeCredentials });
 
-			const { body: first } = await start(token.access_token);
-			t.ok(status(first) === "code_required" && "sign_in_id" in first, `status for an unusual sign-in is code_required, got ${JSON.stringify(first)}`);
-			t.ok(first.sign_in_id && first.code?.sent_to && first.expires_at, "code_required has sign_in_id, code.sent_to and expires_at");
-			const wrong = await agent.mediatedSignIn(token.access_token, { code: "000000x" }, first.sign_in_id);
-			t.equal(status(wrong.body), "code_required", "a wrong code asks again");
+			const { body: first } = await start(session);
+			const firstErr = asError(first);
+			t.ok(firstErr?.error === "code_required" && typeof firstErr.sign_in_id === "string", `error for an unusual sign-in is code_required, got ${JSON.stringify(first)}`);
+			const signInId = firstErr?.sign_in_id;
+			t.ok(typeof signInId === "string" && typeof firstErr?.sent_to === "string" && firstErr.expires_in, "code_required has sign_in_id, sent_to and expires_in");
+			if (typeof signInId !== "string") return;
+			const wrong = await agent.mediatedSignIn(session, { sign_in_id: signInId, one_time_code: "000000x" });
+			t.equal(errorOf(wrong.body), "code_required", "a wrong code asks again");
 
 			const code = await lastCode();
-			const stranger = await agent.startSession();
-			const hijack = await agent.mediatedSignIn(stranger.access_token, { code }, first.sign_in_id);
-			t.ok(hijack.httpStatus === 404 && "error" in hijack.body && hijack.body.error === "sign_in_not_found", `another Session can't finish the sign-in: sign_in_not_found, got ${hijack.httpStatus} ${JSON.stringify(hijack.body)}`);
-			const done = await agent.mediatedSignIn(token.access_token, { code }, first.sign_in_id);
-			t.equal(status(done.body), "complete", "the right code completes it");
+			const stranger = await t.agent();
+			const strangerSession = await stranger.startSession();
+			const hijack = await stranger.mediatedSignIn(strangerSession, { sign_in_id: signInId, one_time_code: code });
+			t.ok(hijack.httpStatus === 400 && errorOf(hijack.body) === "invalid_grant", `another client can't finish the sign-in: invalid_grant, got ${hijack.httpStatus} ${JSON.stringify(hijack.body)}`);
+			const done = await agent.mediatedSignIn(session, { sign_in_id: signInId, one_time_code: code });
+			t.ok(isComplete(done.body), "the right code completes it");
 			noCredentials(t, done.body, codeCredentials, "the response");
 
 			const second = await agent.startSession();
-			const { body: again } = await start(second.access_token);
-			t.ok("sign_in_id" in again, `a second sign-in needs a code, got ${JSON.stringify(again)}`);
+			const { body: again } = await start(second);
+			const againErr = asError(again);
+			const againId = againErr?.sign_in_id;
+			t.ok(againErr?.error === "code_required" && typeof againId === "string", `a second sign-in needs a code, got ${JSON.stringify(again)}`);
+			if (typeof againId !== "string") return;
 			let last: string | undefined;
-			for (let i = 0; i < 20 && last !== "failed"; i++) {
-				last = status((await agent.mediatedSignIn(second.access_token, { code: "000000x" }, again.sign_in_id)).body);
+			for (let i = 0; i < 20 && last !== "invalid_grant"; i++) {
+				last = errorOf((await agent.mediatedSignIn(second, { sign_in_id: againId, one_time_code: "000000x" })).body);
 			}
-			t.equal(last, "failed", "wrong codes end in failed within 20 tries");
-			const late = await agent.mediatedSignIn(second.access_token, { code: await lastCode() }, again.sign_in_id);
-			t.equal(`${late.httpStatus} ${status(late.body)}`, "200 failed", "a code for a failed sign-in, even the right one, gets failed again");
+			t.equal(last, "invalid_grant", "wrong codes end in invalid_grant within 20 tries");
+			const late = await agent.mediatedSignIn(second, { sign_in_id: againId, one_time_code: await lastCode() });
+			t.equal(`${late.httpStatus} ${errorOf(late.body)}`, "400 invalid_grant", "a code for a failed sign-in, even the right one, gets invalid_grant again");
 		},
 	}),
 
 	check({
 		id: "mediated/rate-limit",
 		title: "Mediated Sign-In attempts are rate limited with 429 and Retry-After",
-		covers: ["mediated.rate-limit", "tokens.rate-limit"],
+		covers: ["mediated.invalid-grant-sign"],
 		leg: 5,
 		async run(t: Harness) {
-			const { agent, token, unknownAccount, scope } = await mediated(t);
+			const { agent, session, unknownAccount, scope } = await mediated(t);
 			for (let i = 0; i < 30; i++) {
-				const { httpStatus, headers, body } = await agent.mediatedSignIn(token.access_token, { scope, credentials: unknownAccount });
+				const { httpStatus, headers, body } = await agent.mediatedSignIn(session, { scope, credentials: unknownAccount });
 				if (httpStatus === 429) {
 					t.ok(headers.get("retry-after"), "429 has Retry-After");
 					noCredentials(t, body, unknownAccount, "the 429");

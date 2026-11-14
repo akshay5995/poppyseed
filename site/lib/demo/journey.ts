@@ -43,6 +43,7 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		status: 200,
 		lines: [
 			`organization: ${company.poppy.organization.name}`,
+			`protocol_version: ${company.poppy.protocol_version}`,
 			`apis: ${(company.poppy.apis ?? []).map((a) => a.type).join(", ")}`,
 			`extensions: ${Object.keys(company.poppy.extensions ?? {}).join(", ")}`,
 		],
@@ -53,15 +54,18 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		id: "session",
 		title: "Start a Session",
 		actor: "agent",
-		request: `POST ${path(company.metadata.token_endpoint)}`,
+		request: `Poppy-Session · sid ${short(session.sid)}`,
 		status: 200,
-		lines: ["grant: jwt-bearer, signed by the agent's key", `token_type: ${session.token_type} · signed out`, `session key: ${short(session.session.jkt)}`],
+		lines: ["first request with a new sid starts the Session", "signed out · no access token", `delegated key: ${short(session.jkt)}`],
 	});
 
 	const mcpUrl = agent.endpoint("mcp");
-	const mcp = await agent.startSession({ session: session.session, resource: mcpUrl });
+	await agent.mcpInitialize(mcpUrl, session, null);
 	const date = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
-	const found = await agent.mcp<{ structuredContent?: { offers?: Offer[] } }>(mcpUrl, mcp.access_token, "tools/call", { name: "search_flights", arguments: { from: "SFO", to: "LIS", date } });
+	const found = await agent.mcp<{ structuredContent?: { offers?: Offer[] } }>(mcpUrl, session, null, "tools/call", {
+		name: "search_flights",
+		arguments: { from: "SFO", to: "LIS", date },
+	});
 	const offers = found.structuredContent?.offers ?? [];
 	const offer = offers.find((o) => Number(o.price.amount) <= 1000) ?? offers[0];
 	if (!offer) throw new Error("search_flights found no offers");
@@ -96,21 +100,25 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		lines: ["signed in to poppy.travel as maya@poppy.travel", `code ${device.user_code} matches`, `approves ${consent.scopes.join(", ")}`],
 	});
 
-	const signedIn = await agent.pollDevice(device.device_code, session.session);
+	const signedIn = await agent.pollDevice(device.device_code, session);
 	yield step({
 		id: "signed-in",
 		title: "The Session signs in",
 		actor: "agent",
 		request: `POST ${path(company.metadata.token_endpoint)} · device_code`,
 		status: 200,
-		lines: ["signed in", `scope: ${signedIn.scope ?? "trips:read trips:write"}`, "refresh_token: an Account Token for next time"],
+		lines: ["signed in", `scope: ${signedIn.scope ?? "trips:read trips:write"}`, "refresh_token: kept for next time"],
 	});
 
+	const bookUrl = new URL(`${PATHS.tools}/book_flight`, origin).toString();
+	const bookArgs = { offer_id: offer.offer_id, traveler_name: "Maya Chen" };
 	const tool = async (name: string, args: unknown) => {
-		const response = await agent.dpopJson(new URL(`${PATHS.tools}/${name}`, origin).toString(), signedIn.access_token, args);
+		const response = await agent.sessionJson(new URL(`${PATHS.tools}/${name}`, origin).toString(), signedIn.session, args, {
+			accessToken: signedIn.access_token,
+		});
 		return { status: response.status, body: (await readBody(response)) as Record<string, unknown> };
 	};
-	const proposed = await tool("book_flight", { offer_id: offer.offer_id, traveler_name: "Maya Chen" });
+	const proposed = await tool("book_flight", bookArgs);
 	const op = proposed.body.operation as Operation | undefined;
 	if (!op) throw new Error(`book_flight did not propose an operation: ${JSON.stringify(proposed.body)}`);
 	yield step({
@@ -119,18 +127,24 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		actor: "agent",
 		request: `POST ${PATHS.tools}/book_flight`,
 		status: proposed.status,
-		lines: [`operation ${short(op.operation_id)} · revision ${op.revision} · ${op.state}`, op.summary],
+		lines: [`operation ${short(op.operation_id)} · revision ${op.revision}`, `error: ${String(proposed.body.error ?? "approval_required")}`, op.summary ?? ""],
 	});
 
-	// A real agent shows Maya the summary first, and confirms only after she says yes.
-	const confirmed = await agent.confirm(signedIn.access_token, op);
+	// A real agent shows Maya the summary first, and approves only after she says yes.
+	const approved = await agent.approve(
+		signedIn.session,
+		{ url: bookUrl, body: bookArgs },
+		{ operation_id: op.operation_id, revision: op.revision, approver: "user" },
+		{ accessToken: signedIn.access_token },
+	);
+	const approvedBody = (await readBody(approved)) as { summary?: string; operation?: { state?: string; result?: { summary?: string } } };
 	yield step({
 		id: "confirm",
-		title: "Maya says yes; the agent confirms",
+		title: "Maya says yes; the agent approves",
 		actor: "agent",
-		request: `POST ${PATHS.operations}/${short(op.operation_id)}/confirm`,
-		status: 200,
-		lines: [`state: ${confirmed.operation.state}`, confirmed.operation.result?.summary ?? ""],
+		request: `POST ${PATHS.tools}/book_flight · Poppy-Approval`,
+		status: approved.status,
+		lines: [`state: ${approvedBody.operation?.state ?? "succeeded"}`, approvedBody.operation?.result?.summary ?? approvedBody.summary ?? ""],
 	});
 
 	const trips = await tool("my_trips", {});
@@ -144,11 +158,11 @@ export async function* journey(agent: TestAgent, origin: string, browserFetch: F
 		lines: [`${list.length} ${list.length === 1 ? "trip" : "trips"}, newest:`, ...list.slice(-1).map((t) => `${t.reference} · ${t.summary}`)],
 	});
 
-	const chat = await agent.startConversation(signedIn.access_token, agent.message("What trips do I have?"));
+	const chat = await agent.startConversation(signedIn.session, agent.message("What trips do I have?"), { accessToken: signedIn.access_token });
 	let reply: string | undefined;
 	let cursor: string | undefined;
 	for (let i = 0; i < 6 && !reply; i++) {
-		const page = await agent.events(signedIn.access_token, chat.conversation_id, { cursor, wait: 5 });
+		const page = await agent.events(signedIn.session, chat.conversation_id, { cursor, wait: 5, accessToken: signedIn.access_token });
 		reply = page.events.find((e) => e.message?.role === "company")?.message?.text;
 		cursor = page.cursor ?? cursor;
 	}

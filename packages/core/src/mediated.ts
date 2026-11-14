@@ -1,60 +1,79 @@
-import type { ClientRegistry } from "./clients.ts";
-import { invalidRequest, PoppyError } from "./errors.ts";
-import type { Guarded } from "./guard.ts";
-import { strictJson } from "./json.ts";
-import { completeSignIn, requestedScopes, type Grant } from "./oauth.ts";
+import type { LoadedClient } from "./clients.ts";
+import { invalidGrant, invalidRequest, invalidScope, PoppyError } from "./errors.ts";
+import { completeSignIn, type Binding, type Grant } from "./oauth.ts";
 import { hit } from "./ratelimit.ts";
 import { claimOnce, key, secretHash } from "./records.ts";
 import type { Sealer } from "./tokens.ts";
 import type { ResolvedConfig } from "./types.ts";
-import { json, randomId } from "./util.ts";
+import { randomId, scopeList } from "./util.ts";
 
 /**
- * Mediated Sign-In (spec 4.7): the Personal Agent signs in with credentials
- * the User gave it. Credentials are checked by your `verify` and never stored
- * or returned. Attempts are rate limited, and unusual sign-ins need a code.
+ * Mediated Sign-In extension grant at the token endpoint
+ * (`https://personalagentprotocol.org/grant/mediated-sign-in`). The old
+ * /poppy/sign-in routes return 404 from the router.
  */
 
 /**
  * A sign-in that needed a one-time code, until it completes, fails or
- * expires. Only the Session that started it can use it. A failed one is kept
- * until it expires, so a late code gets `failed` again (spec 4.7).
+ * expires. Only the client that started it can finish it. A failed one is
+ * kept until it expires, so a late code gets invalid_grant again.
  */
-type PendingSignIn = { sessionId: string; clientId: string; expiresAt: number } & (
+type PendingSignIn = { clientId: string; expiresAt: number } & (
 	| ({ status: "code_required"; codeHash: string; attempts: number } & Grant)
 	| { status: "failed" }
 );
 
 const MAX_CODE_ATTEMPTS = 5;
 const CODE_TTL_MS = 10 * 60_000;
-const NO_STORE = { "cache-control": "no-store" };
+const NO_STORE = { "cache-control": "no-store", pragma: "no-cache" };
+const LIMITS = { perClient: 5, perAccount: 10, windowMs: 15 * 60_000 };
 
-/** Fixed-window attempt limits for Mediated Sign-In (guide: Mediated Sign-In). */
-const LIMITS = { perUser: 5, perAccount: 10, windowMs: 15 * 60_000 };
+export interface MediatedGrantRequest {
+	form: URLSearchParams;
+	client: LoadedClient;
+	config: ResolvedConfig;
+	sealer: Sealer;
+	bind: () => Promise<Binding>;
+	request: Request;
+}
 
-export async function mediatedEndpoint(request: Request, config: ResolvedConfig, clients: ClientRegistry, sealer: Sealer, auth: Guarded, signInId: string | undefined): Promise<Response> {
+/** Scopes Mediated Sign-In may grant: only those listed on the extension. */
+function mediatedScopes(scope: string | null, allowed: string[]): string[] {
+	if (!scope?.trim()) throw invalidScope("scope is required");
+	const scopes = scopeList(scope);
+	const unknown = scopes.filter((s) => !allowed.includes(s));
+	if (unknown.length > 0) throw invalidScope(`not available for Mediated Sign-In: ${unknown.join(" ")}`);
+	return [...new Set(scopes)];
+}
+
+/** OAuth grant handler for Mediated Sign-In. */
+export async function mediatedGrant({ form, client, config, sealer, bind, request }: MediatedGrantRequest): Promise<Record<string, unknown>> {
 	const mediated = config.signIn?.mediated;
-	if (!mediated) throw new PoppyError(404, "not_found", "Mediated Sign-In is not offered");
-	const body = await strictJson(request);
-	const { ctx } = auth;
-	const client = await clients.load(ctx.clientId);
+	if (!mediated) throw new PoppyError(400, "unsupported_grant_type", "Mediated Sign-In is not offered");
+
+	const clientId = client.meta.client_id;
 	const complete = async (grant: Grant) => {
-		const tokens = await completeSignIn(config, sealer, client, grant, { jkt: ctx.sessionId });
-		await mediated.notify?.({ accountId: grant.accountId, clientId: ctx.clientId, clientName: client.meta.client_name });
-		return json({ status: "complete", ...tokens }, 200, NO_STORE);
+		const binding = await bind();
+		const tokens = await completeSignIn(config, sealer, client, grant, binding, form.get("scope"));
+		await mediated.notify?.({ accountId: grant.accountId, clientId, clientName: client.meta.client_name });
+		return tokens;
 	};
 
-	if (signInId !== undefined) {
+	const signInId = form.get("sign_in_id");
+	if (signInId !== null) {
+		const code = form.get("one_time_code")?.trim() ?? "";
+		if (!code) throw invalidRequest("one_time_code is required");
 		const pendingKey = key.mediated(signInId);
 		const pending = await config.store.get<PendingSignIn>(pendingKey);
-		// Unknown and another Session's sign-in are the same error.
-		if (!pending || pending.sessionId !== ctx.sessionId || pending.clientId !== ctx.clientId) throw new PoppyError(404, "sign_in_not_found", "no such sign-in for this Session");
-		if (pending.expiresAt <= Date.now()) return json({ status: "expired" }, 200, NO_STORE);
-		if (pending.status === "failed") return json({ status: "failed" }, 200, NO_STORE);
-		const code = typeof body.code === "string" ? body.code.trim() : "";
-		// A right code completes one sign-in, even if it arrives twice at once.
-		if (code && (await secretHash(`${signInId}:${code}`)) === pending.codeHash) {
-			if (!(await claimOnce(config.store, pendingKey, pending.expiresAt))) return json({ status: "failed" }, 200, NO_STORE);
+		// Unknown and another client's sign-in are the same error.
+		if (!pending || pending.clientId !== clientId) throw invalidGrant("the sign_in_id is invalid or belongs to another client");
+		if (pending.expiresAt <= Date.now()) {
+			await config.store.delete(pendingKey);
+			throw new PoppyError(400, "expired_token", "the sign-in expired; start again", { headers: NO_STORE });
+		}
+		if (pending.status === "failed") throw invalidGrant("the sign-in failed");
+		if ((await secretHash(`${signInId}:${code}`)) === pending.codeHash) {
+			if (!(await claimOnce(config.store, pendingKey, pending.expiresAt))) throw invalidGrant("the sign-in failed");
 			const done = await complete(pending);
 			await config.store.delete(pendingKey);
 			return done;
@@ -62,45 +81,67 @@ export async function mediatedEndpoint(request: Request, config: ResolvedConfig,
 		const updated = await config.store.update<PendingSignIn>(pendingKey, (current) => {
 			if (current?.status !== "code_required") return undefined;
 			const attempts = current.attempts + 1;
-			return attempts >= MAX_CODE_ATTEMPTS ? { sessionId: current.sessionId, clientId: current.clientId, expiresAt: current.expiresAt, status: "failed" } : { ...current, attempts };
+			return attempts >= MAX_CODE_ATTEMPTS
+				? { clientId: current.clientId, expiresAt: current.expiresAt, status: "failed" }
+				: { ...current, attempts };
 		});
-		if (updated?.status !== "code_required") return json({ status: "failed" }, 200, NO_STORE);
-		return json(codeRequired(signInId, undefined, updated.expiresAt), 200, NO_STORE);
+		if (updated?.status !== "code_required") throw invalidGrant("the sign-in failed");
+		throw codeRequired(signInId, undefined, updated.expiresAt);
 	}
 
-	const scopes = requestedScopes(typeof body.scope === "string" ? body.scope : null, mediated.scopes);
-	const credentials = body.credentials;
-	if (!credentials || typeof credentials !== "object" || Array.isArray(credentials)) throw invalidRequest("credentials is required");
+	const scopes = mediatedScopes(form.get("scope"), mediated.scopes);
 	const values: Record<string, string> = {};
 	for (const field of mediated.fields) {
-		const value = (credentials as Record<string, unknown>)[field.name];
-		if (typeof value !== "string" || !value) throw invalidRequest(`credentials.${field.name} is required`);
+		const value = form.get(field.name);
+		if (typeof value !== "string" || !value) throw invalidRequest(`${field.name} is required`);
 		values[field.name] = value;
 	}
 
-	// Limit by agent and User, and by the account being tried, before checking anything (spec 4.7).
-	await limit(config, `mediated-user:${ctx.clientId}:${ctx.userId}`, LIMITS.perUser);
-	await limit(config, `mediated-account:${await secretHash(values[mediated.fields[0].name]!.toLowerCase())}`, LIMITS.perAccount);
+	// Limit by client and by the account being tried, before checking credentials.
+	await limit(config, `mediated-client:${clientId}`, LIMITS.perClient);
+	await limit(config, `mediated-account:${await secretHash(values[mediated.fields[0]!.name]!.toLowerCase())}`, LIMITS.perAccount);
 
-	const account = await mediated.verify(values, { clientId: ctx.clientId, userId: ctx.userId, request });
+	// Session userId is not on the token request; verify gets a stable client-scoped placeholder.
+	const attemptUserId = `usr_${clientId}`;
+	const account = await mediated.verify(values, { clientId, userId: attemptUserId, request });
 	// One answer for an unknown account and a wrong password.
-	if (!account) return json({ status: "failed" }, 200, NO_STORE);
-	if (!(await mediated.codeRequired?.({ accountId: account.id, clientId: ctx.clientId, userId: ctx.userId, request }))) return complete({ accountId: account.id, scopes });
+	if (!account) throw invalidGrant("invalid credentials");
+	const grant: Grant = { accountId: account.id, scopes, userId: `usr_${account.id}` };
+	if (!(await mediated.codeRequired?.({ accountId: account.id, clientId, userId: grant.userId, request }))) {
+		return complete(grant);
+	}
 
 	const id = randomId("sgn");
 	const code = String(crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000).padStart(6, "0");
 	const expiresAt = Date.now() + CODE_TTL_MS;
-	const pending: PendingSignIn = { status: "code_required", sessionId: ctx.sessionId, clientId: ctx.clientId, accountId: account.id, scopes, codeHash: await secretHash(`${id}:${code}`), attempts: 0, expiresAt };
+	const pending: PendingSignIn = {
+		status: "code_required",
+		clientId,
+		accountId: grant.accountId,
+		scopes: grant.scopes,
+		userId: grant.userId,
+		codeHash: await secretHash(`${id}:${code}`),
+		attempts: 0,
+		expiresAt,
+	};
 	await config.store.set(key.mediated(id), pending, { expiresAt: expiresAt + 60_000 });
 	const { sentTo } = await mediated.sendCode({ accountId: account.id, code });
-	return json(codeRequired(id, sentTo, expiresAt), 200, NO_STORE);
+	throw codeRequired(id, sentTo, expiresAt);
 }
 
-function codeRequired(id: string, sentTo: string | undefined, expiresAt: number): Record<string, unknown> {
-	return { status: "code_required", sign_in_id: id, ...(sentTo ? { code: { sent_to: sentTo } } : {}), expires_at: new Date(expiresAt).toISOString() };
+function codeRequired(id: string, sentTo: string | undefined, expiresAt: number): PoppyError {
+	const expiresIn = Math.max(1, Math.floor((expiresAt - Date.now()) / 1000));
+	return new PoppyError(400, "code_required", "a one-time code is required", {
+		headers: NO_STORE,
+		body: { sign_in_id: id, ...(sentTo ? { sent_to: sentTo } : {}), expires_in: expiresIn },
+	});
 }
 
 async function limit(config: ResolvedConfig, k: string, max: number): Promise<void> {
 	const { count, resetIn } = await hit(config.store, k, LIMITS.windowMs);
-	if (count > max) throw new PoppyError(429, "rate_limited", "too many sign-in attempts; try again later", { headers: { "retry-after": String(resetIn) } });
+	if (count > max) {
+		throw new PoppyError(429, "rate_limited", "too many sign-in attempts; try again later", {
+			headers: { "retry-after": String(resetIn), ...NO_STORE },
+		});
+	}
 }

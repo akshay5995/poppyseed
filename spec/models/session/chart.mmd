@@ -1,0 +1,36 @@
+---
+title: "A session"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: Starting
+    lg1: Signed in
+    lg2: Signed out
+    lg3: Ended
+  }
+  class lg0 tan
+  class lg1 teal
+  class lg2 orange
+  class lg3 purple
+  s0: No session yet
+  s1: Signed out
+  s2: Session ended
+  s3: Signed in
+  s4: Signed in, new key
+  s5: Signed out after sign-out
+  [*] --> s0
+  s0 --> s1: first request with a new sid
+  s1 --> s2: the company ends the session
+  s1 --> s3: sign in (direct, device, or mediated)
+  s3 --> s2: the company ends the session
+  s3 --> s4: refresh with a new DPoP key
+  s3 --> s5: revoke the refresh token
+  s4 --> s2: the company ends the session
+  s4 --> s5: revoke the refresh token
+  s5 --> s2: the company ends the session
+  class s0 tan
+  class s1 tan
+  class s2 purple
+  class s3 teal
+  class s4 teal
+  class s5 orange

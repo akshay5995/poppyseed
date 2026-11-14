@@ -22,11 +22,11 @@ it("calls tools through the turn and replies in plain text", async () => {
 	});
 	const agent = await host.createAgent((async (input: RequestInfo | URL, init?: RequestInit) => (await company.handle(new Request(input, init)))!) as typeof fetch);
 	await agent.discover("https://t.test");
-	const { access_token: token } = await agent.startSession();
-	const { conversation_id: id } = await agent.startConversation(token, agent.message("Where is order 1042?"));
+	const session = await agent.startSession();
+	const { conversation_id: id } = await agent.startConversation(session, agent.message("Where is order 1042?"));
 	let reply: string | undefined;
 	for (let i = 0; i < 50 && !reply; i++) {
-		reply = (await agent.events(token, id, { wait: 1 })).events.find((e) => e.message?.role === "company")?.message?.text;
+		reply = (await agent.events(session, id, { wait: 1 })).events.find((e) => e.message?.role === "company")?.message?.text;
 	}
 	expect(reply).toBe("Order 1042 has shipped.");
 	expect(requests[0]!.tools.map((t) => t.name)).toEqual(["lookup", "handoff_to_person", "ask_for_user"]);
