@@ -25,7 +25,8 @@ const MAX_CACHE_MS = 86_400_000;
 const REFETCH_MIN_MS = 30_000;
 const MAX_CLIENTS = 1_000;
 const MAX_BYTES = 100_000;
-const ALGS = ["ES256", "RS256"];
+/** Client assertions: ES256 required, PS384 accepted (spec 4.1). */
+const ALGS = ["ES256", "PS384"];
 /** Longest an assertion may live: `exp` at most five minutes after `iat` (spec 4.2). */
 const MAX_LIFETIME_SEC = 300;
 export const CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
