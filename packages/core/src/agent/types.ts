@@ -80,7 +80,7 @@ export interface TargetProfile {
 			/** The same action with different terms, so proposing it gives the next revision. */
 			revisedArguments: Record<string, unknown>;
 		};
-		/** An action whose operation has user_approval_required. */
+		/** An action whose tool returns approval_required (operations extension v3). */
 		approvalAction?: ActionTool;
 		/** An action that takes longer than the confirm wait, so it is in_progress first. */
 		slowAction?: ActionTool;
@@ -92,10 +92,10 @@ export interface TargetProfile {
 	web?: {
 		/** A page that answers 200 only when the request's Session (or site sign-in) has the User's account with scopedTool's scope, and otherwise names the scope it needs. */
 		accountPage: string;
-		/** A page that confirms an operation for the browser's Session when POSTed `revision` as a form; `{id}` stands for the operation ID. */
+		/** A page that triggers a website operation (operations extension); `{id}` stands for a path parameter when needed. */
 		confirmOperation?: string;
 	};
-	/** Mediated Sign-In (spec 4.7). Credentials of the test accounts, as `auth.mediated.fields` names them. */
+	/** Mediated Sign-In extension. Credentials of the test accounts, as the extension's `fields` names them. */
 	mediated?: {
 		/** Alice's credentials; signing in with them needs no code. */
 		credentials: Record<string, string>;

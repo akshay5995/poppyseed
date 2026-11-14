@@ -1,10 +1,11 @@
 import type { Fetch } from "./types.ts";
 
 /**
- * The person at the keyboard during Direct and Device Sign-In: a cookie jar
- * that follows a company's pages and fills in its consent form. It reads
- * Poppyseed's pages (forms marked data-poppy-consent and data-poppy-device);
- * other companies can be driven the same way with their own form markers.
+ * The person at the keyboard during Direct and Device Sign-In, and the
+ * Personal Agent's own browser for Session join (spec 6): a cookie jar that
+ * follows a company's pages and fills in its forms. It reads Poppyseed's
+ * pages (forms marked data-poppy-consent and data-poppy-device); other
+ * companies can be driven the same way with their own form markers.
  */
 export interface ConsentForm {
 	/** Where the form posts. */

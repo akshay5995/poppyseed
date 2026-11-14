@@ -6,6 +6,7 @@ import type { Fetch } from "./types.ts";
 export interface HostedAgentOptions {
 	/** Rewrites the client metadata before it is served, to test refusals. */
 	tamper?: (metadata: Record<string, unknown>) => Record<string, unknown>;
+	/** Declared on Poppy-Extensions for resource requests, not in client metadata. */
 	extensions?: TestAgentOptions["extensions"];
 	/** Use this exact client_id instead of a hosted one. Its metadata is not served unless `serve` is set. */
 	clientId?: string;
